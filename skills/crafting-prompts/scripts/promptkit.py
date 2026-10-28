@@ -48,7 +48,7 @@ PLACE = re.compile(r"\{\{\s*([A-Za-z_][\w-]*)\s*\}\}")
 
 
 def sh(*cmd: str) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 

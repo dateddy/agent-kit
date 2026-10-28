@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import shlex
 import shutil
@@ -24,6 +25,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 GATES = ("format", "lint", "typecheck", "test")
 MAX_ERR = 15  # error lines shown per failed gate
@@ -36,7 +39,7 @@ SKIP_RE = re.compile(r"(pytest\.mark\.(skip|xfail)|@unittest\.skip|\b(it|test|de
 
 
 def sh(*cmd: str, cwd: Path | None = None) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, encoding="utf-8", errors="replace")
     return p.stdout if p.returncode == 0 else ""
 
 
@@ -52,7 +55,8 @@ def has_tool(cmd: str) -> bool:
     if not parts:
         return False
     if parts[0] in ("python", "python3") and len(parts) > 2 and parts[1] == "-m":
-        return subprocess.run([sys.executable, "-c", f"import {parts[2]}"], capture_output=True).returncode == 0
+        return subprocess.run([sys.executable, "-c", f"import {parts[2]}"], capture_output=True,
+                              env=CHILD_ENV).returncode == 0
     return shutil.which(parts[0]) is not None
 
 
@@ -134,7 +138,8 @@ def run_gate(root: Path, gate: str, cmd: str) -> tuple[str, float, list[str], Pa
     (logdir / ".gitignore").exists() or (logdir / ".gitignore").write_text("*\n")  # logs never get committed
     log = logdir / f"verify-{gate}-{dt.datetime.now():%Y%m%d-%H%M%S}.log"
     t0 = time.time()
-    p = subprocess.run(cmd, shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(cmd, shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       env=CHILD_ENV)
     out = p.stdout.decode("utf-8", "replace")
     log.write_text(out, encoding="utf-8")
     dur = time.time() - t0

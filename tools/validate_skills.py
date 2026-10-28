@@ -7,10 +7,13 @@ Exit 1 if any ERROR.  Usage: python tools/validate_skills.py [skills_dir]
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 UTF8_RE = re.compile(r"reconfigure\(encoding=[\"']utf-8")
@@ -70,7 +73,7 @@ def check(skill: Path) -> tuple[list[str], list[str], str]:
     for py in sorted((skill / "scripts").glob("*.py")) if (skill / "scripts").exists() else []:
         if not UTF8_RE.search(py.read_text(encoding="utf-8")):
             errs.append(f"{py.name} lacks UTF-8 stdio reconfigure (see A1)")
-        r = subprocess.run([sys.executable, str(py), "--help"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([sys.executable, str(py), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, env=CHILD_ENV)
         if r.returncode != 0:
             errs.append(f"{py.name} --help failed: {r.stderr.strip()[:120]}")
     est = f"desc≈{len(desc) // TOK} tok (always loaded) · body≈{len(body) // TOK} tok (on trigger) · {n} lines"

@@ -31,7 +31,7 @@ MAX_LINES = 80  # tree output budget
 
 
 def run(*cmd: str, cwd: Path | None = None) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, encoding="utf-8", errors="replace")
     return p.stdout if p.returncode == 0 else ""
 
 

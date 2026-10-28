@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -30,8 +31,10 @@ DEFAULTS = {"dir": "experiments", "default_metrics": []}
 TAIL = 15  # lines of command output echoed after a run
 
 
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
 def sh(*cmd: str) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -197,7 +200,7 @@ def cmd_run(a, r, c):
     shell = len(cmd) == 1 and " " in cmd[0]
     t0 = time.time()
     with log.open("w", encoding="utf-8") as fh:
-        p = subprocess.run(cmd[0] if shell else cmd, shell=shell, stdout=fh, stderr=subprocess.STDOUT)
+        p = subprocess.run(cmd[0] if shell else cmd, shell=shell, stdout=fh, stderr=subprocess.STDOUT, env=CHILD_ENV)
     dur = round(time.time() - t0, 1)
     tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-TAIL:]
     print(f"$ {' '.join(cmd)}\nexit {p.returncode} · {dur}s · log: {log.relative_to(r)}")

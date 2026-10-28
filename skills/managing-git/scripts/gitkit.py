@@ -52,7 +52,7 @@ DIFF_MAX_PER_FILE = 120
 
 # ---------------------------------------------------------------- utilities
 def git(*args: str, check: bool = False) -> subprocess.CompletedProcess:
-    p = subprocess.run(["git", *args], capture_output=True, text=True, errors="replace")
+    p = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and p.returncode != 0:
         sys.exit(f"git {' '.join(args)} failed: {p.stderr.strip()}")
     return p

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -41,8 +42,10 @@ PLACEHOLDER = re.compile(r"\b(TODO|TBD|FIXME|XXX)\b|\?\?\?|<[a-z][^<>\n]*\s[^<>\
 MANUAL = re.compile(r"\b(manual(ly)?|visually|by hand|eyeball|thủ công|xem bằng mắt)\b", re.I)
 
 
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
 def sh(*cmd: str) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -202,7 +205,8 @@ def cmd_apply(a, r):
         print("WARN: keeping-notes not installed; record the plan with:")
         print("  notes.py " + " ".join(f'"{x}"' if " " in x else x for x in args))
         return WARN
-    p = subprocess.run([sys.executable, str(notes), *args], capture_output=True, text=True)
+    p = subprocess.run([sys.executable, str(notes), *args], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=CHILD_ENV)
     print(p.stdout.strip() or p.stderr.strip())
     return code if p.returncode == 0 else p.returncode
 

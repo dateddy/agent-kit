@@ -43,7 +43,7 @@ DEC_HEADER = re.compile(r"^## (D-\d{3,}) · (\d{4}-\d{2}-\d{2}) · ([a-z0-9._-]+
 
 # ---------------------------------------------------------------- env
 def run(*cmd: str) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -257,7 +257,7 @@ def cmd_brief(a, r, cfg, base):
         if act:
             lines.append("OPEN TASKS (git switch <branch> to resume)")
             lines += [f"  {x.branch} · {x.status} · {x.progress()} · {x.goal[:60]}" for x in act[:5]]
-    st = subprocess.run(["git", "status", "--porcelain=v1"], capture_output=True, text=True, errors="replace").stdout
+    st = subprocess.run(["git", "status", "--porcelain=v1"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     ch = [l[3:] for l in st.splitlines() if len(l) > 3]  # keep leading status columns intact
     if ch:
         lines.append(f"UNCOMMITTED {len(ch)}: " + ", ".join(ch[:8]) + (" …" if len(ch) > 8 else ""))

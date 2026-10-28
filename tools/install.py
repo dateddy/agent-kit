@@ -102,7 +102,7 @@ def main() -> int:
             print(f"keep {dst}")
 
     r = subprocess.run([sys.executable, str(canon / "keeping-notes" / "scripts" / "notes.py"), "init"],
-                       cwd=repo, capture_output=True, text=True)
+                       cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(r.stdout.strip() or r.stderr.strip())
     print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, notes/decisions.md.")
     return 0
