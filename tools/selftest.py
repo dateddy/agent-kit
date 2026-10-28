@@ -382,6 +382,65 @@ def b3d(t: T):
     check("disable-model-invocation: true" in text, "frontmatter lost")
 
 
+# ================================================================ B4 dbg
+@scenario("B4a", "dbg open/hypo/close round trip; list shows the closed bug with its cause")
+def b4a(t: T):
+    d = t.repo()
+    sha = git(d, "rev-parse", "HEAD").strip()
+    code, out = kit("dbg", "open", "--layer", "code", "--symptom", "KeyError answer parsing model output",
+                    "--repro", "python app.py", cwd=d)
+    check(code == 0 and "B-001" in out, f"open: exit {code}: {out[:200]}")
+    code, out = kit("dbg", "hypo", "B-001", "dict is missing the key", "--result", "rejected", cwd=d)
+    check(code == 0, f"hypo: exit {code}: {out[:200]}")
+    code, out = kit("dbg", "close", "B-001", "--cause", f"loader skipped {VI}", "--fix", sha, cwd=d, force_cp1252=True)
+    check(code == 0, f"close: exit {code}: {out[:200]}")
+    code, out = kit("dbg", "list", cwd=d, force_cp1252=True)
+    check(code == 0 and "B-001" in out and "closed" in out and f"loader skipped {VI}" in out, f"list: {out[:300]}")
+    code, out = kit("dbg", "list", "--open", cwd=d)
+    check("no bugs open" in out, f"list --open: {out[:200]}")
+
+
+@scenario("B4b", "dbg close without --cause BLOCKs")
+def b4b(t: T):
+    d = t.repo()
+    kit("dbg", "open", "--layer", "data", "--symptom", "row count drops after join", cwd=d)
+    code, out = kit("dbg", "close", "B-001", cwd=d)
+    check(code == 1 and "--cause" in out, f"exit {code}: {out[:200]}")
+    code, out = kit("dbg", "list", "--open", cwd=d)
+    check("B-001" in out, "bug must stay open")
+
+
+@scenario("B4c", "a second open with a similar symptom WARNs and names the earlier bug")
+def b4c(t: T):
+    d = t.repo()
+    kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer when parsing model output json", cwd=d)
+    code, out = kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer parsing model output", cwd=d)
+    check(code == 2 and "B-001" in out and "B-002" in out, f"exit {code}: {out[:300]}")
+    code, out = kit("dbg", "open", "--layer", "data", "--symptom", "unrelated disk quota exceeded", cwd=d)
+    check(code == 0, f"unrelated bug should not warn: exit {code}: {out[:200]}")
+
+
+@scenario("B4d", "dbg llm-case appends a valid case; promptkit check still passes; bad vars BLOCK")
+def b4d(t: T):
+    spec = {"name": "qa", "target": "generic", "goal": "Answer the question from the documents.",
+            "inputs": [{"name": "question", "description": "user question"}],
+            "instructions": ["Answer only from the documents."],
+            "output": {"format": "text", "description": "A short answer."}, "cases": []}
+    d = t.repo(files={"prompts/qa.spec.json": json.dumps(spec, indent=2) + "\n"})
+    kit("dbg", "open", "--layer", "llm", "--symptom", "model invents a price", cwd=d)
+    code, out = kit("dbg", "llm-case", "B-001", "--spec", "prompts/qa.spec.json", "--vars", '{"nope": "x"}',
+                    "--check", '{"type":"not_contains","value":"$"}', cwd=d)
+    check(code == 1, f"mismatched vars should BLOCK: exit {code}: {out[:200]}")
+    code, out = kit("dbg", "llm-case", "B-001", "--spec", "prompts/qa.spec.json",
+                    "--vars", '{"question": "How much is it?"}', "--check", '{"type":"not_contains","value":"$"}', cwd=d)
+    check(code == 0, f"llm-case: exit {code}: {out[:200]}")
+    got = json.loads((d / "prompts/qa.spec.json").read_text(encoding="utf-8"))
+    check(got["cases"] == [{"vars": {"question": "How much is it?"},
+                            "checks": [{"type": "not_contains", "value": "$"}], "source": "B-001"}], f"cases: {got['cases']}")
+    code, out = kit("pk", "check", "prompts/qa.spec.json", cwd=d)
+    check(code == 0, f"promptkit check exit {code}: {out[:300]}")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252
