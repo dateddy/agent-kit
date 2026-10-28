@@ -2,9 +2,7 @@
 
 Skills live in `.agentkit/skills/<name>/` — read a skill's SKILL.md before the work it covers.
 Short names used below (run with `python`; paths relative to `.agentkit/skills/`):
-`nt` keeping-notes/scripts/notes.py · `gk` managing-git/scripts/gitkit.py · `pl` writing-plans/scripts/plan.py
-`vf` verifying-changes/scripts/verify.py · `run` economizing-context/scripts/run.py · `rm` economizing-context/scripts/repomap.py
-`ex` tracking-experiments/scripts/exp.py · `pk` crafting-prompts/scripts/promptkit.py · `dbg` debugging-systematically/scripts/dbg.py
+{{SHORT_NAMES}}
 
 ## Mode: question or task
 - Message starts with `?` → **question mode**: read-only. Read, search and run read-only commands; do not edit files, commit, or touch task notes. Answer concisely, then stop.
@@ -14,12 +12,12 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 
 ## Task lifecycle
 1. Start of session: `nt brief`. Trust it over re-exploring; read only what it points to.
-2. Non-trivial task → plan first (writing-plans). ≤2 files and no design decision → lite path: no plan file. New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it. After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
+2. Non-trivial task → plan first (writing-plans). ≤2 files and no design decision → lite path: no plan file.<!--if:grilling-designs--> New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it.<!--/if--> After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
 3. Per step: `pl step N` → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit (managing-git). Before editing a module: `rm --zone <file>`. Inner loop: `vf --affected`; the full `vf` is still required before commit.
 4. Done only when `vf` exits 0 after the last edit (never pipe it; the VERDICT line is authoritative). Never weaken tests to pass.
 5. Decision settled by the user → `nt decide --topic … --text … --why …`.
-6. Training/eval runs → `ex run … -- <cmd>`, never bare.
-7. Something fails → debugging-systematically: `dbg open --layer code|data|llm …`, no guess-and-edit.
+<!--if:tracking-experiments-->6. Training/eval runs → `ex run … -- <cmd>`, never bare.<!--/if-->
+<!--if:debugging-systematically-->7. Something fails → debugging-systematically: `dbg open --layer code|data|llm …`, no guess-and-edit.<!--/if-->
 
 ## Scripts decide, you write
 - Exit codes: 0 OK · 2 WARN → show the user and wait for yes · 1 BLOCK → fix and re-run. Never bypass a BLOCK.

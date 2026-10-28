@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Install agent-kit into a repo (or your user profile). Stdlib only, idempotent.
 
-  python tools/install.py <repo>          project install (recommended)
+  python tools/install.py <repo>          project install (recommended): core skills writing-plans, keeping-notes,
+                                          managing-git, verifying-changes, economizing-context
+  python tools/install.py <repo> --with experiments,prompts,grill,debug
+                                          also install optional skills (tracking-experiments, crafting-prompts,
+                                          grilling-designs, debugging-systematically); a later re-run keeps and
+                                          updates the ones already installed. AGENTS.md lists only installed skills.
   python tools/install.py --user          skills only, into ~/.claude/skills (all projects)
   python tools/install.py <repo> --force  overwrite existing .claude/skills/<name> entries
   python tools/install.py <repo> --hooks  also add a Claude Code SessionStart hook that runs `notes.py brief`
@@ -33,7 +38,18 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
-SKILLS = sorted(p for p in (KIT / "skills").iterdir() if (p / "SKILL.md").exists())
+ALL_SKILLS = {p.name: p for p in sorted((KIT / "skills").iterdir()) if (p / "SKILL.md").exists()}
+CORE = ("writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context")
+OPTIONAL = {"experiments": "tracking-experiments", "prompts": "crafting-prompts",
+            "grill": "grilling-designs", "debug": "debugging-systematically"}
+COMMAND_SKILL = {"grill.md": "grilling-designs"}  # command file -> skill it needs; others are always installed
+# short name, skill, script: the AGENTS.md "Short names" lines list only what is installed
+SHORT = (("nt", "keeping-notes", "notes.py"), ("gk", "managing-git", "gitkit.py"), ("pl", "writing-plans", "plan.py"),
+         ("vf", "verifying-changes", "verify.py"), ("run", "economizing-context", "run.py"),
+         ("rm", "economizing-context", "repomap.py"), ("ex", "tracking-experiments", "exp.py"),
+         ("pk", "crafting-prompts", "promptkit.py"), ("dbg", "debugging-systematically", "dbg.py"))
+AGENTS_MARK = "<!-- Project-specific rules below this line -->"
+COND_RE = re.compile(r"<!--if:([a-z-]+)-->(.*?)<!--/if-->")
 
 
 def copy_skill(src: Path, dst: Path) -> None:
@@ -98,6 +114,34 @@ def merge_hook(repo: Path) -> tuple[str, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     return f"hook {path} (SessionStart -> notes.py brief)", 0
+
+
+# ---------------------------------------------------------------- skill selection and templates
+def parse_with(value: str | None) -> list[str] | None:
+    """Skill names for `--with a,b`; None (after printing why) if a name is unknown."""
+    names = []
+    for w in (value or "").split(","):
+        w = w.strip()
+        if not w:
+            continue
+        if w not in OPTIONAL:
+            print(f"BLOCK: unknown --with '{w}'. Choose from: {', '.join(OPTIONAL)}")
+            return None
+        names.append(OPTIONAL[w])
+    return names
+
+
+def render(template: str, installed: set[str]) -> str:
+    """Fill {{SHORT_NAMES}} and drop <!--if:skill-->…<!--/if--> parts whose skill is not installed."""
+    items = [f"`{n}` {s}/scripts/{f}" for n, s, f in SHORT if s in installed]
+    short = "\n".join(" · ".join(items[i:i + 3]) for i in range(0, len(items), 3))
+    out = []
+    for line in template.replace("{{SHORT_NAMES}}", short).split("\n"):
+        new = COND_RE.sub(lambda m: m.group(2) if m.group(1) in installed else "", line)
+        if new != line and not new.strip():
+            continue  # the whole line belonged to a skill that is not installed
+        out.append(new)
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- git hooks
@@ -221,12 +265,18 @@ def main() -> int:
     ap.add_argument("--user", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--hooks", action="store_true", help="add a Claude Code SessionStart hook (notes.py brief)")
+    ap.add_argument("--with", dest="with_", metavar="NAMES",
+                    help="optional skills, comma separated: " + ", ".join(f"{k} ({v})" for k, v in OPTIONAL.items()))
     ap.add_argument("--git-hooks", action="store_true", help="install pre-commit (scan) and commit-msg (lint-msg) git hooks")
     ap.add_argument("--uninstall-git-hooks", action="store_true", help="remove only the agent-kit blocks from git hooks")
     a = ap.parse_args()
 
     if a.user and (a.git_hooks or a.uninstall_git_hooks):
         ap.error("git hooks belong to a repo; give a repo path instead of --user")
+    extra = parse_with(a.with_)
+    if extra is None:
+        return 1
+    wanted = list(dict.fromkeys([*CORE, *extra]))
     if a.user:
         dest = Path.home() / ".claude" / "skills"
         dest.mkdir(parents=True, exist_ok=True)
@@ -236,9 +286,9 @@ def main() -> int:
             if md.is_file() and f"name: {name}" in md.read_text(encoding="utf-8"):
                 remove_path(old)
                 print(f"remove {old} (merged into writing-plans)")
-        for s in SKILLS:
-            copy_skill(s, dest / s.name)
-            print(f"copy {dest / s.name}")
+        for name in wanted:
+            copy_skill(ALL_SKILLS[name], dest / name)
+            print(f"copy {dest / name}")
         print("NOTE: AGENTS.md references .agentkit/skills/ — for project use run a project install too.")
         return 0
 
@@ -253,23 +303,40 @@ def main() -> int:
     canon = repo / ".agentkit" / "skills"
     canon.mkdir(parents=True, exist_ok=True)
     remove_legacy(repo)
-    for s in SKILLS:
-        copy_skill(s, canon / s.name)
-        print(f"copy {canon / s.name}")
-        print(link_or_copy(canon / s.name, repo / ".claude" / "skills" / s.name, a.force))
+    # core + --with, plus optional skills an earlier install already put here (so a re-run updates them)
+    previous = [n for n in ALL_SKILLS if (canon / n / "SKILL.md").exists()]
+    for name in dict.fromkeys([*wanted, *previous]):
+        copy_skill(ALL_SKILLS[name], canon / name)
+        print(f"copy {canon / name}")
+        print(link_or_copy(canon / name, repo / ".claude" / "skills" / name, a.force))
+    installed = {n for n in ALL_SKILLS if (canon / n / "SKILL.md").exists()}
 
     for name, src in (("AGENTS.md", KIT / "templates" / "AGENTS.md"),
                       ("CLAUDE.md", KIT / "templates" / "CLAUDE.md"),
                       (".agentkit.json", KIT / ".agentkit.example.json"),
-                      *((f".claude/commands/{c.name}", c) for c in sorted((KIT / "templates" / "commands").glob("*.md")))):
+                      *((f".claude/commands/{c.name}", c) for c in sorted((KIT / "templates" / "commands").glob("*.md"))
+                        if COMMAND_SKILL.get(c.name, "writing-plans") in installed)):
         dst = repo / name
+        rendered = render(src.read_text(encoding="utf-8"), installed) if name in ("AGENTS.md", "CLAUDE.md") else None
         if not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src, dst)
+            if rendered is None:
+                shutil.copy(src, dst)
+            else:
+                write_raw(dst, rendered)
             print(f"create {dst}")
         elif name == ".claude/commands/task.md" and "starting-tasks" in dst.read_text(encoding="utf-8"):
             shutil.copy(src, dst)
             print(f"update {dst} (now points to writing-plans)")
+        elif name == "AGENTS.md" and AGENTS_MARK in dst.read_text(encoding="utf-8"):
+            text = dst.read_text(encoding="utf-8").replace("\r\n", "\n")
+            head, _, tail = text.partition(AGENTS_MARK)
+            new_head = rendered.partition(AGENTS_MARK)[0]
+            if head == new_head:
+                print(f"keep {dst}")
+            else:
+                write_raw(dst, new_head + AGENTS_MARK + tail)
+                print(f"update {dst} (rules above the marker regenerated for the installed skills)")
         elif name == "AGENTS.md" and "keeping-notes" not in dst.read_text(encoding="utf-8"):
             print(f"WARN {dst} exists — merge the rules from {src} into it by hand")
         elif name == "CLAUDE.md" and "@AGENTS.md" not in dst.read_text(encoding="utf-8"):

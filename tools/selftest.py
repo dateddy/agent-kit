@@ -375,7 +375,7 @@ def b3c(t: T):
 @scenario("DC4", "install copies the grilling-designs skill and /grill command")
 def b3d(t: T):
     d = t.repo()
-    code, out = kit("install", str(d), cwd=t.base)
+    code, out = kit("install", str(d), "--with", "grill", cwd=t.base)
     check(code == 0, f"install exit {code}: {out[:300]}")
     check((d / ".agentkit/skills/grilling-designs/SKILL.md").is_file(), "skill not installed")
     check((d / ".claude/commands/grill.md").is_file() and (d / ".claude/commands/task.md").is_file(),
@@ -575,6 +575,58 @@ def b3d(t: T):
     py.write_text("#!/usr/bin/env python3\nprint('x')\n", encoding="utf-8", newline="\n")
     code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
     check(code == 2 and py.read_text(encoding="utf-8").count("agent-kit") == 0, f"non-sh hook: exit {code}: {out[-300:]}")
+
+
+# ================================================================ B4 core vs optional skills
+def skills_in(d: Path) -> set:
+    return {p.name for p in (d / ".agentkit" / "skills").iterdir() if (p / "SKILL.md").exists()}
+
+
+def listed_in_agents(d: Path) -> set:
+    import re
+    return set(re.findall(r"([a-z-]+)/scripts/", (d / "AGENTS.md").read_text(encoding="utf-8")))
+
+
+CORE5 = {"writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context"}
+
+
+@scenario("B4", "default install = 5 core skills; --with adds optional ones; AGENTS.md lists exactly the installed")
+def b4(t: T):
+    d = t.repo("core")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"install exit {code}: {out[-300:]}")
+    check(skills_in(d) == CORE5, f"installed: {sorted(skills_in(d))}")
+    claude_skills = {p.name for p in (d / ".claude" / "skills").iterdir()}
+    check(claude_skills == CORE5, f".claude/skills: {sorted(claude_skills)}")
+    text = (d / "AGENTS.md").read_text(encoding="utf-8")
+    check(listed_in_agents(d) == CORE5, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
+    check("`dbg`" not in text and "`ex run" not in text and "/grill" not in text and "<!--" not in text.replace(
+        "<!-- Project-specific rules below this line -->", ""), "optional skill lines leaked into AGENTS.md")
+    check("/grill" not in (d / "CLAUDE.md").read_text(encoding="utf-8"), "CLAUDE.md mentions /grill")
+    check(not (d / ".claude/commands/grill.md").exists() and (d / ".claude/commands/task.md").is_file(), "commands wrong")
+
+    e = t.repo("opt")
+    code, out = kit("install", str(e), "--with", "experiments,prompts", cwd=t.base)
+    check(code == 0, f"install --with exit {code}: {out[-300:]}")
+    want = CORE5 | {"tracking-experiments", "crafting-prompts"}
+    check(skills_in(e) == want and len(want) == 7, f"installed: {sorted(skills_in(e))}")
+    check(listed_in_agents(e) == want, f"AGENTS.md lists {sorted(listed_in_agents(e))}")
+    check("`ex run" in (e / "AGENTS.md").read_text(encoding="utf-8"), "ex line missing")
+
+    # upgrading an existing install: a re-run without --with keeps optional skills; adding grill regenerates AGENTS.md
+    code, out = kit("install", str(e), cwd=t.base)
+    check(code == 0 and skills_in(e) == want, f"re-run changed the set: {sorted(skills_in(e))}")
+    code, out = kit("install", str(e), "--with", "grill,debug", cwd=t.base)
+    check(code == 0 and "update" in out and "AGENTS.md" in out, f"exit {code}: {out[-400:]}")
+    # grilling-designs has no script, so it has no short name; every other installed skill must be listed
+    check(len(skills_in(e)) == 9 and listed_in_agents(e) == skills_in(e) - {"grilling-designs"},
+          f"AGENTS.md lists {sorted(listed_in_agents(e))}")
+    check("/grill" in (e / "AGENTS.md").read_text(encoding="utf-8") and (e / ".claude/commands/grill.md").is_file(),
+          "grill not wired in")
+
+    f = t.repo("bad")
+    code, out = kit("install", str(f), "--with", "bogus", cwd=t.base)
+    check(code == 1 and "experiments" in out and not (f / ".agentkit").exists(), f"exit {code}: {out[-300:]}")
 
 
 # ================================================================ V validate the real kit
