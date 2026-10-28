@@ -25,6 +25,8 @@ Path: `python <this-skill>/scripts/gitkit.py <cmd>` (shown below as `gk`). Confi
 ```
 - [ ] 1. gk snapshot
 - [ ] 2. Group changes by concern. >1 group → propose groups to user, one commit each
+      (code + its tests + its docstring/README line = one concern = one commit;
+       kit-managed files — notes/, .agentkit/, .agentkit.json — never count as a concern)
 - [ ] 3. git add <explicit paths>      (never `git add -A`/`.` unless user said "all")
 - [ ] 4. gk preflight commit           (WARN on protected branch → ask: commit here or new branch?)
 - [ ] 5. gk scan --staged

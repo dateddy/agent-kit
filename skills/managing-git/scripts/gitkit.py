@@ -214,15 +214,23 @@ def cmd_diff(a, cfg):
 
 # ---------------------------------------------------------------- suggest
 TYPE_RULES = [  # (type, path predicate) — first full match over ALL files wins
-    ("docs", lambda p: p.endswith((".md", ".rst", ".txt")) or p.startswith(("docs/", "doc/"))),
-    ("test", lambda p: re.search(r"(^|/)(tests?|__tests__|spec)/|(_test|\.test|\.spec|test_)[^/]*$", p) is not None),
-    ("ci", lambda p: p.startswith((".github/", ".gitlab-ci", ".circleci/")) or p in ("Jenkinsfile", ".gitlab-ci.yml")),
     ("build", lambda p: os.path.basename(p) in (
         "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "package.json", "Dockerfile",
         "docker-compose.yml", "Makefile", "go.mod", "Cargo.toml", "environment.yml") or ignored(p, ["*.lock", "*-lock.*"])),
+    ("docs", lambda p: p.endswith((".md", ".rst", ".txt")) or p.startswith(("docs/", "doc/"))),
+    ("test", lambda p: re.search(r"(^|/)(tests?|__tests__|spec)/|(_test|\.test|\.spec|test_)[^/]*$", p) is not None),
+    ("ci", lambda p: p.startswith((".github/", ".gitlab-ci", ".circleci/")) or p in ("Jenkinsfile", ".gitlab-ci.yml")),
     ("style", lambda p: os.path.basename(p) in (".editorconfig", ".prettierrc", "ruff.toml", ".flake8")),
     ("chore", lambda p: os.path.basename(p) in (".gitignore", ".gitattributes", ".agentkit.json", "LICENSE")),
 ]
+
+
+KIT_MANAGED = ("notes/", ".agentkit/", "prompts/runs/")
+
+
+def kit_managed(p: str) -> bool:
+    """Files the kit writes itself; they never decide a commit's category."""
+    return p.startswith(KIT_MANAGED) or p in (".agentkit.json", "experiments/runs.jsonl")
 
 
 def cmd_suggest(a, cfg):
@@ -230,7 +238,9 @@ def cmd_suggest(a, cfg):
     if not paths:
         print("no changes" + (" staged" if a.staged else ""))
         return BLOCK
-    decided = next((t for t, pred in TYPE_RULES if all(pred(p) for p in paths)), None)
+    managed = [p for p in paths if kit_managed(p)]
+    cand = [p for p in paths if not kit_managed(p)] or paths
+    decided = next((t for t, pred in TYPE_RULES if all(pred(p) for p in cand)), None)
     # scope = most common first meaningful directory
     tops = {}
     for p in paths:
@@ -248,9 +258,17 @@ def cmd_suggest(a, cfg):
         print("type: UNDECIDED -> choose from feat|fix|refactor|perf by reading the diff")
         print("  hint: new public behavior=feat, wrong behavior corrected=fix, same behavior restructured=refactor")
     print(f"scope: {scope or '(none — omit or pick from config scopes)'}")
-    cats = {t for p in paths for t, pred in TYPE_RULES if pred(p)}
-    if len(paths) > 1 and len(cats) > 1 and not decided:
-        print(f"WARN: mixed categories {sorted(cats)} + source files — consider splitting the commit")
+    if managed and cand is not paths:
+        print(f"ignored kit-managed: {len(managed)}")
+    # first matching category per file; no match = source. Tests ride along with their source.
+    cats = {next((t for t, pred in TYPE_RULES if pred(p)), "source") for p in cand}
+    has_src = "source" in cats
+    others = cats - {"source", "test"} if has_src else cats
+    if has_src and len(others) >= 2:
+        print(f"WARN: mixed categories {sorted(others)} + source files — consider splitting the commit")
+        return WARN
+    if not has_src and len(others) >= 2 and not decided:
+        print(f"WARN: mixed categories {sorted(others)} (no source files) — consider splitting the commit")
         return WARN
     return OK
 
