@@ -75,8 +75,8 @@ def main() -> int:
         tool("Write", file_path="cfg.py")
         test = cwd / "tests" / "test_base.py"
         if test.is_file():
-            test.write_text(test.read_text(encoding="utf-8").replace(
-                "    def test_", '    @unittest.skip("fake")\n    def test_', 1), encoding="utf-8", newline="\n")
+            test.write_bytes(test.read_text(encoding="utf-8").replace(
+                "    def test_", '    @unittest.skip("fake")\n    def test_', 1).encode("utf-8"))
             tool("Edit", file_path="tests/test_base.py")
         bash("git add -A")
         bash('git commit -q --no-verify -m "bad message"')
