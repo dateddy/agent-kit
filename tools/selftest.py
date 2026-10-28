@@ -502,6 +502,8 @@ def hooked_repo(t: T, name: str = "h") -> Path:
     d = t.repo(name)
     code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
     check(code == 0, f"install --git-hooks exit {code}: {out[-300:]}")
+    for hook in ("pre-commit", "commit-msg"):
+        check(b"\r" not in (d / ".git" / "hooks" / hook).read_bytes(), f"{hook} hook contains CR (sh breaks on CRLF)")
     return d
 
 
