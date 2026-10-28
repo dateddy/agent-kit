@@ -473,6 +473,15 @@ def b5b(t: T):
     check((bad / ".claude/settings.json").read_text(encoding="utf-8") == "{ not json\n", "invalid file was modified")
 
 
+# ================================================================ V validate the real kit
+@scenario("V", "validate_skills on the real kit: exit 0, all 10 skills ok")
+def v(t: T):
+    code, out = kit("validate", cwd=t.base)
+    oks = [l for l in out.splitlines() if l.startswith("ok ")]
+    check(code == 0 and len(oks) == 10 and "FAIL" not in out and "ERROR" not in out,
+          f"exit {code}, {len(oks)} ok lines: {out[:400]}")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252
