@@ -1,0 +1,5 @@
+{
+  "max_turns_per_session": [30],
+  "with": [],
+  "oracle_cmd": "python -m unittest discover -s oracle -t ."
+}

@@ -1,0 +1,12 @@
+[
+  {"query": "quên mật khẩu thì làm sao", "expected_id": "faq-002"},
+  {"query": "muốn đăng ký tài khoản", "expected_id": "faq-001"},
+  {"query": "có thanh toán qua momo được không", "expected_id": "faq-007"},
+  {"query": "ship hàng mất bao nhiêu tiền", "expected_id": "faq-012"},
+  {"query": "mấy ngày thì giao tới", "expected_id": "faq-013"},
+  {"query": "hủy đơn hàng như thế nào", "expected_id": "faq-017"},
+  {"query": "hàng bị vỡ khi nhận", "expected_id": "faq-020"},
+  {"query": "voucher không áp dụng được", "expected_id": "faq-024"},
+  {"query": "số hotline chăm sóc khách hàng", "expected_id": "faq-026"},
+  {"query": "xuất hóa đơn đỏ cho công ty", "expected_id": "faq-011"}
+]

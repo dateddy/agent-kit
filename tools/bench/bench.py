@@ -13,7 +13,8 @@ Conditions (applied to a fresh `git clone` of the fixture in a temp dir; the fix
 
 Task folder tasks/<ID>/:  task.md (prompt; a line `---new-session---` starts a NEW `claude -p` session),
 meta.json {"max_turns_per_session": [..], "with": [], "oracle_cmd": "..."}, oracle/ (hidden tests, copied in
-only after the agent finishes).
+only after the agent finishes), optional seed/ (files copied over the clone before the setup commit, so they are
+part of the starting state, e.g. an eval set or a pre-seeded failing test).
 
 Real runs cost money: `run` prints the worst-case spend and exits 2 until you pass --yes. By default each session
 runs with --setting-sources project,local --strict-mcp-config, so your user-level skills/MCP servers do not leak
@@ -128,7 +129,8 @@ def find_claude() -> str:
 
 
 # ---------------------------------------------------------------- workdirs
-def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str) -> tuple[Path, str, str]:
+def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str,
+                    seed: Path | None = None) -> tuple[Path, str, str]:
     """Clone the fixture, apply the condition, commit it. Returns (workdir, base_sha, fixture_sha)."""
     fixture_sha = git(fixture, "rev-parse", "HEAD").strip()
     wd = base / label
@@ -145,6 +147,8 @@ def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str
             p.unlink()
         elif p.is_dir():
             rmtree(p)
+    if seed is not None and seed.is_dir():
+        shutil.copytree(seed, wd, dirs_exist_ok=True)
     if cond == "rules":
         shutil.copy(KIT / "templates" / "AGENTS.rules-only.md", wd / "AGENTS.md")
         (wd / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8", newline="\n")
@@ -310,7 +314,7 @@ def run_one(a, task: dict, cond: str, trial: int, base: Path, logs: Path, fixtur
     tools, kits, bash = Counter(), Counter(), []
     try:
         wd, base_sha, row["fixture_sha"] = prepare_workdir(fixture, cond, task["meta"], base,
-                                                            f"{task['id']}-{cond}-t{trial}")
+                                                            f"{task['id']}-{cond}-t{trial}", task["dir"] / "seed")
         row["base_sha"] = base_sha
         turns = task["meta"].get("max_turns_per_session") or []
         for k, prompt in enumerate(task["prompts"]):

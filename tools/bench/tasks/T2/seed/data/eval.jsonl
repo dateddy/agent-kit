@@ -1,0 +1,13 @@
+{"query": "quên mật khẩu", "expected_id": "faq-002"}
+{"query": "trả góp", "expected_id": "faq-010"}
+{"query": "phí ship", "expected_id": "faq-012"}
+{"query": "mã giảm giá", "expected_id": "faq-024"}
+{"query": "hoàn tiền", "expected_id": "faq-019"}
+{"query": "đăng ký", "expected_id": "faq-001"}
+{"query": "tích điểm", "expected_id": "faq-025"}
+{"query": "cửa hàng", "expected_id": "faq-027"}
+{"query": "hotline", "expected_id": "faq-026"}
+{"query": "giờ mở cửa", "expected_id": "faq-028"}
+{"query": "app điện thoại", "expected_id": "faq-001"}
+{"query": "hủy email quảng cáo", "expected_id": "faq-030"}
+{"query": "bitcoin", "expected_id": "faq-007"}

@@ -634,8 +634,9 @@ def b4(t: T):
 # ================================================================ D bench harness (fake claude only)
 BENCH = KIT / "tools" / "bench" / "bench.py"
 FAKE = KIT / "tools" / "bench" / "fake_claude.py"
-ORACLE = ("import unittest\nfrom answer import answer\n\n\nclass T(unittest.TestCase):\n"
-          "    def test_answer(self):\n        self.assertEqual(answer(), 42)\n")
+ORACLE = ("import unittest\nfrom pathlib import Path\nfrom answer import answer\n\n\nclass T(unittest.TestCase):\n"
+          "    def test_answer(self):\n        self.assertEqual(answer(), 42)\n\n"
+          "    def test_seed_was_copied(self):\n        self.assertEqual(Path('SEEDED.txt').read_text().strip(), 'ok')\n")
 
 
 def bench_setup(t: T) -> tuple:
@@ -646,7 +647,7 @@ def bench_setup(t: T) -> tuple:
         "task.md": "Create answer.py (fake:s1)\n---new-session---\nContinue the work (fake:s2)\n",
         "meta.json": json.dumps({"max_turns_per_session": [5, 5], "with": [],
                                  "oracle_cmd": "python -m unittest discover -s oracle -t ."}),
-        "oracle/__init__.py": "", "oracle/test_answer.py": ORACLE})
+        "oracle/__init__.py": "", "oracle/test_answer.py": ORACLE, "seed/SEEDED.txt": "ok\n"})
     bin_ = t.sub("bin")
     sh_shim = bin_ / "claude"
     sh_shim.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "{FAKE.as_posix()}" "$@"\n',
