@@ -130,7 +130,7 @@ Out of scope: tuning hybrid weights.
 
 **Agent (planning model, read-only):**
 1. `nt brief` → no open task on this branch; one earlier decision about retrieval is shown.
-2. Maps the code (`rm`, `rm --symbols`), reads two functions by line range.
+2. Maps the code (`rmap`, `rmap --symbols`), reads two functions by line range.
 3. Outputs a plan: 3 steps, each with exact files, the change, a verify command and a done criterion.
 
 **You:** read it, ask for a change if needed, then accept.
@@ -178,7 +178,7 @@ Out of scope: tuning hybrid weights.
 ## 5. Skills
 
 Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`):
-`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rm` repomap.py · `ex` exp.py · `pk` promptkit.py · `dbg` dbg.py.
+`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rmap` repomap.py · `ex` exp.py · `pk` promptkit.py · `dbg` dbg.py.
 
 `AGENTS.md` lists only the ones installed. You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
 
@@ -186,7 +186,7 @@ Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`
 
 *Optional: `install.py --with grill`.*
 
-**What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rm`, `rm --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
+**What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rmap`, `rmap --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
 
 **How to invoke:** `/grill <feature>` (manual only: the skill has `disable-model-invocation: true`, so the agent never starts it by itself; `writing-plans` just suggests it when grilling-designs is installed). In other agents, ask to be grilled on the design.
 
@@ -381,7 +381,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 
 **Test-integrity guard:** compared to `HEAD`, it flags deleted test files, newly added `skip`/`xfail`/`.skip(` markers and removed assertions. If tests "pass" because they were weakened, the verdict is `PASS WITH TEST CHANGES` (exit 2) and the agent must show you the changes.
 
-**Fast inner loop:** `vf --affected` asks `rm --zone-from-diff` which tests can be affected by your changed files and runs only those (pytest paths or unittest modules). The verdict says `(affected only)`. No affected tests → `test SKIP no affected tests`. If repomap is missing or the runner is not pytest/unittest it runs the full test gate and says why. It is for iterating only: **a full `vf` is still required before a commit and before saying "done".**
+**Fast inner loop:** `vf --affected` asks `rmap --zone-from-diff` which tests can be affected by your changed files and runs only those (pytest paths or unittest modules). The verdict says `(affected only)`. No affected tests → `test SKIP no affected tests`. If repomap is missing or the runner is not pytest/unittest it runs the full test gate and says why. It is for iterating only: **a full `vf` is still required before a commit and before saying "done".**
 
 **Commands:** `vf` (all gates) · `vf --only lint,test` · `vf --affected` (inner loop) · `vf --detect` (what would run and why) · `vf --no-guard`.
 
@@ -406,7 +406,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 
 | Layer | Procedure |
 |---|---|
-| **code** (exception, wrong logic) | Reproduce with `run`, find the zone from the log (`rm --zone-from-log`), write a failing test first, fix, full `vf` |
+| **code** (exception, wrong logic) | Reproduce with `run`, find the zone from the log (`rmap --zone-from-log`), write a failing test first, fix, full `vf` |
 | **data** (bad or shifted inputs) | Inspect the real inputs first (schema, counts, a few samples) before touching code |
 | **llm** (wrong or invalid model output) | Capture the verbatim prompt, raw output and failing field; turn it into a prompt test case; fix the prompt, never loosen the parser |
 
@@ -425,7 +425,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 
 | Situation | What happens |
 |---|---|
-| Test fails with a traceback | `dbg open --layer code`; `run` the repro; `rm --zone-from-log` lists the files that matter; a failing test is written before the fix |
+| Test fails with a traceback | `dbg open --layer code`; `run` the repro; `rmap --zone-from-log` lists the files that matter; a failing test is written before the fix |
 | Retrieval returns nothing for Vietnamese queries | `--layer data`: inspect the documents (encoding, normalisation, counts) before changing the retriever |
 | The model invents a price | `--layer llm`: `dbg llm-case` adds the failing question with `not_contains` as a case; the prompt spec is changed and `pk test` re-run |
 | Same error as three weeks ago | `dbg open` prints the earlier bug and its cause as a WARN; the agent checks that cause first |
@@ -438,24 +438,24 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 **`repomap.py`** shows a repo's shape without reading file contents:
 
 ```
-$ rm --depth 3
+$ rmap --depth 3
 proj/  214 files · ~180k tok of text
 src/  (120 files, ~95k tok)
   vimed/  (118 files, ~94k tok)
     retrieval/  (14 files, ~21k tok)
 data/  (6 files, ~60k tok, 3 binary)
 …
-$ rm --symbols src/vimed/retrieval/hybrid.py
+$ rmap --symbols src/vimed/retrieval/hybrid.py
     3-41    class HybridRetriever
     4-9       def __init__(self, dense, sparse, alpha)
    11-41      def search(self, query, k)
   → read a symbol with: sed -n 'START,ENDp' src/vimed/retrieval/hybrid.py
 ```
 
-**Blast radius, `rm --zone` (Python):** before editing a module, planning a refactor or debugging from a traceback, ask which files can be affected. The graph comes from `ast` (nothing is executed; `import a.b`, `from a import b`, relative imports and `src/` layouts are resolved).
+**Blast radius, `rmap --zone` (Python):** before editing a module, planning a refactor or debugging from a traceback, ask which files can be affected. The graph comes from `ast` (nothing is executed; `import a.b`, `from a import b`, relative imports and `src/` layouts are resolved).
 
 ```
-$ rm --zone faq/search.py --hops 2
+$ rmap --zone faq/search.py --hops 2
 SEEDS  faq/search.py
 dist  dir  path  lines  ~tok   (↑ imported-by · ↓ imports)
    1  ↑    faq/__main__.py  38  ~371
@@ -464,9 +464,9 @@ TESTS
 zone 2 of 17 .py files · ~900 tok
 ```
 
-`rm --zone-from-diff` uses the changed and untracked files as seeds; `rm --zone-from-log run.log` uses the repo files in a Python traceback; `--direction imports|importers|both`, `--hops N`, `--json` for other scripts. It prints paths, line counts and ~tokens only; the agent then reads zone files with `rm --symbols` and a line range. Dynamic imports (`importlib.import_module(name)`) are reported as `NOTE:` because they cannot be traced. Non-Python repos exit 2 with "zone supports Python only".
+`rmap --zone-from-diff` uses the changed and untracked files as seeds; `rmap --zone-from-log run.log` uses the repo files in a Python traceback; `--direction imports|importers|both`, `--hops N`, `--json` for other scripts. It prints paths, line counts and ~tokens only; the agent then reads zone files with `rmap --symbols` and a line range. Dynamic imports (`importlib.import_module(name)`) are reported as `NOTE:` because they cannot be traced. Non-Python repos exit 2 with "zone supports Python only".
 
-Also `rm --big` lists the most expensive files (never read these whole). It honors `.gitignore` and skips `node_modules`, venvs, caches, `wandb`, `mlruns`, `checkpoints` and binaries.
+Also `rmap --big` lists the most expensive files (never read these whole). It honors `.gitignore` and skips `node_modules`, venvs, caches, `wandb`, `mlruns`, `checkpoints` and binaries.
 
 **`run.py`** runs any command, writes the full output to `.agentkit/logs/`, and prints only status, exit code, duration, unique error lines, the last traceback and the tail. Outputs of 60 lines or fewer are shown whole. It exits with the command's own code.
 
@@ -485,11 +485,11 @@ TAIL (20):
 
 | Situation | Without the skill | With it |
 |---|---|---|
-| Agent explores a new repo | Opens file after file | `rm` → `rg` → `rm --symbols` → reads one line range |
+| Agent explores a new repo | Opens file after file | `rmap` → `rg` → `rmap --symbols` → reads one line range |
 | `pip install -r requirements.txt` | Hundreds of "Collecting…" lines in context | One status line, or the error |
 | Training run with per-step logs | 10k+ lines in context for the rest of the session | Error + traceback + tail; grep the log for more |
 | Test suite with verbose output | Whole log repeated on every later turn | The failing tests only |
-| About to change `retrieval/hybrid.py` | Greps for callers, opens each | `rm --zone retrieval/hybrid.py`: importers, imports and their tests, as paths |
+| About to change `retrieval/hybrid.py` | Greps for callers, opens each | `rmap --zone retrieval/hybrid.py`: importers, imports and their tests, as paths |
 
 ### tracking-experiments
 
@@ -585,7 +585,7 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | `notes.base_branch` | auto | Branch used by `nt sync` to detect merges |
 | `context.max_output_lines` | 60 | `run.py` prints outputs up to this length whole |
 | `context.ignore_dirs` | `[]` | Extra directories for `repomap.py` to skip (e.g., `"data"`) |
-| `context.zone_max_files` | 40 | Zone file lines `rm --zone` prints before "… +k more" |
+| `context.zone_max_files` | 40 | Zone file lines `rmap --zone` prints before "… +k more" |
 | `debug.min_similarity` | 0.4 | Keyword overlap (0–1) at which `dbg` calls two bugs similar |
 | `verify.format/lint/typecheck/test` | `auto` | `auto`, a command, or `null` to skip |
 | `experiments.dir`, `experiments.default_metrics` | `experiments`, `[]` | Run log location; columns for `ex list` |

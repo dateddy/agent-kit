@@ -8,7 +8,7 @@ Common causes to check, in order of how often they turn out to be the answer. Te
 - Off-by-one, empty input, `None` reaching a function that assumes a value.
 - Mutable default argument; state kept between calls; module-level caches.
 - Wrong path or working directory (relative paths, `__file__`, tests run from another dir).
-- Import problems: shadowed module name, circular import, wrong package root (`rm --zone` shows who imports whom).
+- Import problems: shadowed module name, circular import, wrong package root (`rmap --zone` shows who imports whom).
 - Environment: Python version, missing optional dependency, Windows vs POSIX paths and line endings, console encoding.
 - Async/concurrency: ordering, unawaited coroutine, shared state.
 - Recent change: `git log -5 --stat -- <file>`; `git bisect` when the last good commit is known.

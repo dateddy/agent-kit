@@ -2,7 +2,8 @@
 """Validate every skills/*/SKILL.md against the authoring rules this kit follows.
 
 Checks: frontmatter name/description limits, name == folder, body length, relative links
-exist and stay one level deep, scripts answer --help. Prints a token estimate per skill.
+exist and stay one level deep, scripts answer --help, no short name that is a common shell command
+(rm, mv, cp, ls, cat …; `run` is fine). Prints a token estimate per skill.
 Exit 1 if any ERROR.  Usage: python tools/validate_skills.py [skills_dir]
 """
 from __future__ import annotations
@@ -21,6 +22,10 @@ UTF8_RE = re.compile(r"reconfigure\(encoding=[\"']utf-8")
 LINK_RE = re.compile(r"\]\(([^)#\s]+)\)")
 BODY_MAX = 500          # Anthropic hard guidance
 BODY_TARGET = 150       # this kit's own budget: SKILL.md should stay lean
+SHELL_CMDS = {"rm", "mv", "cp", "ls", "cat", "cd", "mkdir", "rmdir", "touch", "chmod", "chown", "ln", "kill", "ps",
+              "grep", "find", "sed", "awk", "head", "tail", "echo", "sort", "diff", "tar", "make", "test", "which"}
+# where a short name is defined: "(`x`)", "`x` = skill", "`x` skill/scripts/file.py"
+DEFINE_RE = re.compile(r"\(`(\w+)`\)|`(\w+)`\s*=|`(\w+)`\s+[\w-]+/scripts/")
 TOK = 4                 # rough chars per token for English markdown
 
 
@@ -34,6 +39,11 @@ def frontmatter(text: str) -> tuple[dict, str]:
             k, v = line.split(":", 1)
             meta[k.strip()] = v.strip()
     return meta, m[2]
+
+
+def shadowed_names(text: str) -> list[str]:
+    """Short names the text defines that are also common shell commands (a bare `rm` would run the shell's)."""
+    return sorted({n for m in DEFINE_RE.finditer(text) for n in m.groups() if n in SHELL_CMDS})
 
 
 def check(skill: Path) -> tuple[list[str], list[str], str]:
@@ -55,6 +65,8 @@ def check(skill: Path) -> tuple[list[str], list[str], str]:
         warns.append("description should say when to use it ('Use when …')")
     if re.search(r"<[a-z]", desc):
         errs.append("description contains XML-like tags")
+    for w in shadowed_names(text):
+        errs.append(f"short name '{w}' is also a common shell command; pick another")
     n = len(body.splitlines())
     if n > BODY_MAX:
         errs.append(f"body {n} lines > {BODY_MAX}")
@@ -94,6 +106,12 @@ def main() -> int:
     a = ap.parse_args()
     root = Path(a.skills_dir) if a.skills_dir else Path(__file__).resolve().parent.parent / "skills"
     bad = 0
+    templates = root.parent / "templates"
+    for md in sorted(templates.rglob("*.md")) if templates.is_dir() else []:
+        for w in shadowed_names(md.read_text(encoding="utf-8")):
+            print(f"FAIL {md.relative_to(root.parent).as_posix()}")
+            print(f"     ERROR: short name '{w}' is also a common shell command; pick another")
+            bad += 1
     for skill in sorted(p for p in root.iterdir() if (p / "SKILL.md").exists()):
         errs, warns, est = check(skill)
         print(f"{'FAIL' if errs else 'ok  '} {skill.name:22} {est}")

@@ -29,7 +29,7 @@
     "max_output_lines": 60,
     "_ignore_dirs": "added to the built-in list (.git, node_modules, .venv, __pycache__, dist, build, wandb, mlruns, checkpoints …)",
     "ignore_dirs": [],
-    "_zone_max_files": "rm --zone prints at most this many zone files before '… +k more'",
+    "_zone_max_files": "rmap --zone prints at most this many zone files before '… +k more'",
     "zone_max_files": 40
   },
 

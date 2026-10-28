@@ -30,7 +30,7 @@ SCRIPTS = {
     "nt": SK / "keeping-notes/scripts/notes.py",
     "gk": SK / "managing-git/scripts/gitkit.py",
     "vf": SK / "verifying-changes/scripts/verify.py",
-    "rm": SK / "economizing-context/scripts/repomap.py",
+    "rmap": SK / "economizing-context/scripts/repomap.py",
     "run": SK / "economizing-context/scripts/run.py",
     "dbg": SK / "debugging-systematically/scripts/dbg.py",
     "pk": SK / "crafting-prompts/scripts/promptkit.py",
@@ -285,7 +285,7 @@ def b2(t: T):
 
 # ================================================================ B1 zone
 def zone_json(d: Path, *args) -> tuple[int, dict, str]:
-    code, out = kit("rm", *args, "--json", cwd=d)
+    code, out = kit("rmap", *args, "--json", cwd=d)
     try:
         return code, json.loads(out), out
     except json.JSONDecodeError:
@@ -301,7 +301,7 @@ def b1a(t: T):
     files = {f["path"]: (f["distance"], f["direction"]) for f in j["files"]}
     check(files.get("b.py") == (1, "importers") and files.get("a.py") == (2, "importers"), f"files: {files}")
     check({"tests/test_a.py", "tests/test_c.py"} <= set(j["tests"]), f"tests: {j['tests']}")
-    code, out = kit("rm", "--zone", "c", "--hops", "1", cwd=d)
+    code, out = kit("rmap", "--zone", "c", "--hops", "1", cwd=d)
     check(code == 0 and "b.py" in out and "a.py" not in out.split("TESTS")[0].replace("SEEDS", ""),
           f"text output (dotted seed, hops 1): {out[:300]}")
 
@@ -342,7 +342,7 @@ def b1d(t: T):
     code, j, out = zone_json(d, "--zone", "y.py")
     check(code == 0 and set(j) == {"seeds", "files", "tests", "notes"}, f"keys: {sorted(j)} / {out[:200]}")
     check(any("dynamic import in x.py:6" in n for n in j["notes"]), f"notes: {j['notes']}")
-    code, out = kit("rm", "--zone", "y.py", cwd=d)
+    code, out = kit("rmap", "--zone", "y.py", cwd=d)
     check("NOTE: dynamic import in x.py:6" in out and "import importlib" not in out, f"text: {out[:300]}")
 
 
@@ -795,6 +795,18 @@ def d4(t: T):
     git(d, "commit", "-q", "--no-verify", "-m", f"chore: use {key}")
     check(mod.measure_violations(d, base, [])["secret_in_history"] == 0, "a message is not scanned without the run key")
     check(mod.measure_violations(d, base, [], key)["secret_in_history"] == 1, "the run key in a message must count")
+
+
+# ================================================================ V validate the real kit
+@scenario("V2", "validate_skills fails a short name that is a shell command (rm, mv), in a skill and a template")
+def v2(t: T):
+    skill = ("---\nname: demo\ndescription: Demo. Use when testing.\n---\n"
+             "Path: `python <this-skill>/scripts/x.py` (`rm`).\nOther: `ok` = demo, `run` = demo.\n")
+    t.write(t.base, {"skills/demo/SKILL.md": skill,
+                     "templates/AGENTS.md": "`mv` demo/scripts/x.py · `run` demo/scripts/y.py\n"})
+    code, out = kit("validate", str(t.base / "skills"), cwd=t.base)
+    check(code == 1, f"exit {code}: {out[:300]}")
+    check("'rm'" in out and "'mv'" in out and "'run'" not in out and "'ok'" not in out, out[:400])
 
 
 # ================================================================ V validate the real kit

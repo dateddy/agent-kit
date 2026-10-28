@@ -7,7 +7,7 @@ description: Debugs by classifying the failure first (code, data or LLM output),
 
 Guessing and editing burns tokens and hides the real cause. Classify, reproduce, find the cause, then fix.
 Path: `python <this-skill>/scripts/dbg.py` (`dbg`). Exit: 0 OK · 2 WARN (recurring bug, show the user) · 1 BLOCK (fix and re-run).
-Other tools: `run` and `rm` (economizing-context), `vf` (verifying-changes), `nt` (keeping-notes), `pk` (crafting-prompts).
+Other tools: `run` and `rmap` (economizing-context), `vf` (verifying-changes), `nt` (keeping-notes), `pk` (crafting-prompts).
 
 ## Step 0 — open the bug
 
@@ -30,8 +30,8 @@ Unsure → start with **data** (cheapest to rule out), then code.
 
 ```
 - [ ] 1. run -- <repro>                         exit code + traceback, full log saved
-- [ ] 2. rm --zone-from-log .agentkit/logs/<log>  the files that can matter (paths, never contents)
-- [ ] 3. rm --symbols <file> + a line range      read only the failing function
+- [ ] 2. rmap --zone-from-log .agentkit/logs/<log>  the files that can matter (paths, never contents)
+- [ ] 3. rmap --symbols <file> + a line range      read only the failing function
 - [ ] 4. Write a FAILING test that reproduces it; run it and see it fail for the right reason
 - [ ] 5. dbg hypo B-NNN "<cause guess>"          one at a time; check it with a print/assert/test, then
          dbg hypo B-NNN "…" --result confirmed|rejected

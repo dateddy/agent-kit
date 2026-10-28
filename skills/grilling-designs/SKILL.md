@@ -8,12 +8,12 @@ disable-model-invocation: true
 
 A short interview that turns a vague design into recorded decisions, so the plan (writing-plans) and its executor never have to guess. Manual only: it runs on `/grill <topic>` (Claude Code) or when the user asks for it. Idea credit: Matt Pocock's "grill-me".
 
-Short names: `nt` = keeping-notes, `rm` = economizing-context. Exit codes: 0 OK · 2 WARN (tell the user) · 1 BLOCK (fix, re-run).
+Short names: `nt` = keeping-notes, `rmap` = economizing-context. Exit codes: 0 OK · 2 WARN (tell the user) · 1 BLOCK (fix, re-run).
 
 ## Steps
 
 ```
-- [ ] 1. nt brief, then rm / rm --zone <module>      learn what the code already says
+- [ ] 1. nt brief, then rmap / rmap --zone <module>      learn what the code already says
 - [ ] 2. Build the decision tree (silently)           list open choices; parents before children
 - [ ] 3. Ask ONE question per message                recommended answer + one-line reason
 - [ ] 4. nt decide after EVERY settled answer        not batched at the end
@@ -23,7 +23,7 @@ Short names: `nt` = keeping-notes, `rm` = economizing-context. Exit codes: 0 OK 
 
 ### 1. Look before asking
 
-Never ask the user what the code, the notes or the docs can answer. Run `nt brief` (existing decisions are not re-asked), `rm` for shape, `rm --zone <file>` for the modules a change touches, `rm --symbols <file>` for signatures. Ask only about intent, constraints and trade-offs.
+Never ask the user what the code, the notes or the docs can answer. Run `nt brief` (existing decisions are not re-asked), `rmap` for shape, `rmap --zone <file>` for the modules a change touches, `rmap --symbols <file>` for signatures. Ask only about intent, constraints and trade-offs.
 
 ### 2. Decision tree
 

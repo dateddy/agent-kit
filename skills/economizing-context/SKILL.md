@@ -7,29 +7,29 @@ description: Cuts token use while exploring code and running commands — script
 
 Every tool result stays in the conversation and is re-read on every later turn. Pay for what you need, fetch the rest on demand.
 
-Paths: `python <this-skill>/scripts/repomap.py` (`rm`), `python <this-skill>/scripts/run.py` (`run`).
+Paths: `python <this-skill>/scripts/repomap.py` (`rmap`), `python <this-skill>/scripts/run.py` (`run`).
 
 ## Exploring: map → search → read a range
 
-1. `rm` (or `rm src/ --depth 3`): structure, file counts, ~token cost per dir/file.
-2. `rm --big`: the most expensive files. Never read these whole.
+1. `rmap` (or `rmap src/ --depth 3`): structure, file counts, ~token cost per dir/file.
+2. `rmap --big`: the most expensive files. Never read these whole.
 3. Search before opening: `rg -n "<symbol>" src/` (or `grep -rn`).
-4. `rm --symbols path/file.py`: classes/functions with line ranges.
+4. `rmap --symbols path/file.py`: classes/functions with line ranges.
 5. Read only the range: `sed -n '120,180p' path/file.py` (or the Read tool with offset/limit).
 
 Skip entirely unless the task is about them: lockfiles, datasets, notebook outputs, generated/minified files, checkpoints, logs.
 
-## Blast radius: `rm --zone` (Python)
+## Blast radius: `rmap --zone` (Python)
 
 Shows what a change can touch, from the import graph (`ast`, nothing executed): files that import it (↑), files it imports (↓), and the tests for them. Prints paths, lines and ~tokens only, never file contents.
 
 ```
-rm --zone faq/search.py [more seeds] [--hops 2] [--direction both|imports|importers] [--json]
-rm --zone-from-diff           # seeds = changed + untracked .py files
-rm --zone-from-log run.log    # seeds = repo files in the traceback frames
+rmap --zone faq/search.py [more seeds] [--hops 2] [--direction both|imports|importers] [--json]
+rmap --zone-from-diff           # seeds = changed + untracked .py files
+rmap --zone-from-log run.log    # seeds = repo files in the traceback frames
 ```
 
-Use it **before editing a module**, **when planning a refactor**, and **when debugging from a traceback**. Then read zone files like any other: `rm --symbols <file>` + a line range, never whole files.
+Use it **before editing a module**, **when planning a refactor**, and **when debugging from a traceback**. Then read zone files like any other: `rmap --symbols <file>` + a line range, never whole files.
 `NOTE: dynamic import …` means that edge is not traced; check it by grep. Exit 2 = not a Python repo.
 
 ## Running commands: wrap anything that may print >60 lines

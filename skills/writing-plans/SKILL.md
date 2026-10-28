@@ -27,7 +27,7 @@ Out of scope:  <deferred>
 
    Bad: "Which search method, and CLI or web?" Good: "1. Search method? Recommended: BM25 — reply 'ok'. 2. Interface? Recommended: CLI — reply 'ok'."
    If the user answers "skip", leave the field empty.
-4. If the grilling-designs skill is installed and the task adds or changes a public interface or schema, touches 3 or more modules (`rm --zone`), or left a design choice open: suggest `/grill` in one line. **Never auto-run it.** If the user declines, continue.
+4. If the grilling-designs skill is installed and the task adds or changes a public interface or schema, touches 3 or more modules (`rmap --zone`), or left a design choice open: suggest `/grill` in one line. **Never auto-run it.** If the user declines, continue.
 5. If not in plan mode, suggest it: plan mode with the planning model, execution with a cheaper one (Claude Code: `/model opusplan`, `Shift+Tab`).
 
 Do not create a branch, edit files or write notes before the plan is accepted.

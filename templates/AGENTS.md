@@ -13,7 +13,7 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 ## Task lifecycle
 1. Start of session: `nt brief`. Trust it over re-exploring; read only what it points to.
 2. Non-trivial task → plan first (writing-plans). ≤2 files and no design decision → lite path: no plan file.<!--if:grilling-designs--> New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it.<!--/if--> After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
-3. Per step: `pl step N` → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit (managing-git). Before editing a module: `rm --zone <file>`. Inner loop: `vf --affected`; the full `vf` is still required before commit.
+3. Per step: `pl step N` → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit (managing-git). Before editing a module: `rmap --zone <file>`. Inner loop: `vf --affected`; the full `vf` is still required before commit.
 4. Done only when `vf` exits 0 after the last edit (never pipe it; the VERDICT line is authoritative). Never weaken tests to pass.
 5. Decision settled by the user → `nt decide --topic … --text … --why …`.
 <!--if:tracking-experiments-->6. Training/eval runs → `ex run … -- <cmd>`, never bare.<!--/if-->
@@ -25,7 +25,7 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 - Destructive or irreversible commands (reset --hard, force push, deleting branches/files, dropping stashes): quote the exact command and wait for an explicit yes.
 
 ## Token discipline
-- Locate before reading: `rm`, search (rg/grep), `rm --symbols`, then read the needed line range.
+- Locate before reading: `rmap`, search (rg/grep), `rmap --symbols`, then read the needed line range.
 - Wrap commands that may print >60 lines in `run`. Grep saved logs instead of re-running.
 - Never print lockfiles, datasets, notebook outputs, generated files or checkpoints.
 - Replies: lead with the result. No recap of steps, no restating code you just wrote, no filler.

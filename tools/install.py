@@ -46,7 +46,7 @@ COMMAND_SKILL = {"grill.md": "grilling-designs"}  # command file -> skill it nee
 # short name, skill, script: the AGENTS.md "Short names" lines list only what is installed
 SHORT = (("nt", "keeping-notes", "notes.py"), ("gk", "managing-git", "gitkit.py"), ("pl", "writing-plans", "plan.py"),
          ("vf", "verifying-changes", "verify.py"), ("run", "economizing-context", "run.py"),
-         ("rm", "economizing-context", "repomap.py"), ("ex", "tracking-experiments", "exp.py"),
+         ("rmap", "economizing-context", "repomap.py"), ("ex", "tracking-experiments", "exp.py"),
          ("pk", "crafting-prompts", "promptkit.py"), ("dbg", "debugging-systematically", "dbg.py"))
 AGENTS_MARK = "<!-- Project-specific rules below this line -->"
 COND_RE = re.compile(r"<!--if:([a-z-]+)-->(.*?)<!--/if-->")
@@ -165,7 +165,7 @@ def hook_block(name: str) -> str:
         '  elif command -v python3 >/dev/null 2>&1; then python3 "$@"',
         '  elif command -v python >/dev/null 2>&1; then python "$@"',
         '  elif command -v py >/dev/null 2>&1; then py -3 "$@"',
-        "  else return 0; fi",
+        '  else return 0; fi',
         "}",
         "ak_rc=0",
         'if [ -f "$ak_gk" ]; then',
