@@ -702,8 +702,7 @@ def bench_setup(t: T) -> tuple:
         "oracle/__init__.py": "", "oracle/test_answer.py": ORACLE, "seed/SEEDED.txt": "ok\n"})
     bin_ = t.sub("bin")
     sh_shim = bin_ / "claude"
-    sh_shim.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "{FAKE.as_posix()}" "$@"\n',
-                       encoding="utf-8", newline="\n")
+    sh_shim.write_bytes(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "{FAKE.as_posix()}" "$@"\n'.encode("utf-8"))
     sh_shim.chmod(0o755)
     (bin_ / "claude.cmd").write_bytes((f'@"{sys.executable}" "{FAKE}" %*\r\n').encode("utf-8"))
     env = {"PATH": str(bin_) + os.pathsep + os.environ.get("PATH", "")}
