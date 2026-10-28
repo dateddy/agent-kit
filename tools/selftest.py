@@ -232,6 +232,24 @@ def a4c(t: T):
     check(code == 0, f"exit {code}: {out[:300]}")
 
 
+FAKE_KEY = "sk-" + "a" * 24  # built at runtime so this file never trips the kit's own scan
+
+
+@scenario("A4", "scan --staged ignores kit-managed notes/, still blocks a key in src/")
+def a4(t: T):
+    d = t.repo("a4")
+    t.write(d, {"notes/decisions.md": f"# Decisions\nkey = \"{FAKE_KEY}\"\n"})
+    git(d, "add", "-A")
+    code, out = kit("gk", "scan", "--staged", cwd=d)
+    check(code == 0, f"kit-managed file should be ignored: exit {code}: {out[:300]}")
+    t.write(d, {"src/cfg.py": f"API_KEY = \"{FAKE_KEY}\"\n"})
+    git(d, "add", "-A")
+    code, out = kit("gk", "scan", "--staged", cwd=d)
+    check(code == 1 and "src/cfg.py" in out and "notes/" not in out, f"exit {code}: {out[:300]}")
+    code, out = kit("gk", "diff", "--staged", cwd=d)
+    check("kit-managed" in out and "src/cfg.py" in out, f"diff should list notes/ as kit-managed: {out[:300]}")
+
+
 # ================================================================ B1 zone
 def zone_json(d: Path, *args) -> tuple[int, dict, str]:
     code, out = kit("rm", *args, "--json", cwd=d)

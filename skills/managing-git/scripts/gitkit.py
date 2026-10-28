@@ -190,6 +190,9 @@ def cmd_diff(a, cfg):
     skipped, shown, total = [], [], 0
     base = ["diff", "--no-color", "--no-ext-diff", "-U2"] + (["--cached"] if a.staged else [])
     for p in paths:
+        if kit_managed(p):
+            skipped.append(p + " (kit-managed)")
+            continue
         if ignored(p, cfg["diff_ignore"]):
             skipped.append(p)
             continue
@@ -351,9 +354,9 @@ ALLOW_FILES = [".env.example", ".env.sample", ".env.template"]
 
 def cmd_scan(a, cfg):
     root = repo_root()
-    paths = changed_paths(a.staged)
+    paths = [p for p in changed_paths(a.staged) if not kit_managed(p)]
     if not a.staged:
-        paths += [p for xy, p in status_entries() if xy == "??"]
+        paths += [p for xy, p in status_entries() if xy == "??" and not kit_managed(p)]
     findings, warns = [], []
     for p in paths:
         base = os.path.basename(p)
@@ -369,13 +372,13 @@ def cmd_scan(a, cfg):
     for l in diff.splitlines():
         if l.startswith("+++ b/"):
             cur = l[6:]
-        elif l.startswith("+") and not l.startswith("+++"):
+        elif l.startswith("+") and not l.startswith("+++") and cur and not kit_managed(cur):
             for label, rx in SECRET_PATTERNS:
                 mt = rx.search(l)
                 if mt and not PLACEHOLDER.search(l):
                     findings.append(f"{cur}: possible {label}: {mt.group(0)[:12]}…")
     if not a.staged:
-        for p in [p for xy, p in status_entries() if xy == "??"]:
+        for p in [p for xy, p in status_entries() if xy == "??" and not kit_managed(p)]:
             fp = root / p
             if fp.is_file() and fp.stat().st_size < 1_000_000:
                 txt = fp.read_text(errors="ignore")
