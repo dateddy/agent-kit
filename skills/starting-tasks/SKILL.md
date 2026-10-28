@@ -19,7 +19,12 @@ Done when:     <observable check for the whole task>
 Out of scope:  <deferred>
 ```
 
-3. Ask in **one** message for missing fields only, at most 3 short questions. Always ask for `Done when` if absent. If the user answers "skip", leave the field empty.
+3. Ask only for missing fields, in **one** message, **at most 3 questions**, ranked by how much the answer changes the plan. Always ask for `Done when` if absent. Each question:
+   - asks exactly **one** thing (never "A or B? and C?"), and
+   - ends with a default: `Recommended: X — reply 'ok' to accept`.
+
+   Bad: "Which search method, and CLI or web?" Good: "1. Search method? Recommended: BM25 — reply 'ok'. 2. Interface? Recommended: CLI — reply 'ok'."
+   If the user answers "skip", leave the field empty.
 4. If not in plan mode, suggest it: plan mode with the planning model, execution with a cheaper one (Claude Code: `/model opusplan`, `Shift+Tab`).
 5. Follow writing-plans to produce the plan from the frame. Put the frame's fields in the plan header.
 
