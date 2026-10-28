@@ -58,7 +58,7 @@ Token cost is layered (progressive disclosure):
 
 | Layer | When it is in context | Cost |
 |---|---|---|
-| `name` + `description` of each skill | Always | ~80–145 tokens per skill, ~515 for the five core skills |
+| `name` + `description` of each skill | Always | ~80–115 tokens per skill, ~465 for the five core skills |
 | `SKILL.md` body | Only when the task matches | ~250–900 tokens |
 | `reference/*.md` | Only when that detail is needed | varies |
 | `scripts/*.py` | Never; they are run, and only their output enters context | output only |

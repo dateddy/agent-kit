@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: Frames a new task (goal, constraints, done-when, out-of-scope, asking only for what is missing) and writes implementation plans that a different, cheaper model can execute without re-exploring or making design decisions — every step names exact files, the change, a verify command and an observable done-criterion — validated by scripts/plan.py before any code is written. Use when the user types /task, says "start a task", "new task", "bắt đầu task", asks for a plan, starts a non-trivial feature or fix, works in plan mode, or hands work from a planning model to an executing model.
+description: Frames a task (goal, constraints, done-when, out-of-scope) and writes plans a cheaper model can execute without design decisions: every step names files, change, verify command and done-criterion, checked by scripts/plan.py. Use when the user types /task, says "start a task", "new task", "bắt đầu task", asks for a plan, starts a non-trivial feature or fix, or works in plan mode.
 ---
 
 # Writing plans
