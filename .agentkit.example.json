@@ -28,7 +28,14 @@
   "context": {
     "max_output_lines": 60,
     "_ignore_dirs": "added to the built-in list (.git, node_modules, .venv, __pycache__, dist, build, wandb, mlruns, checkpoints …)",
-    "ignore_dirs": []
+    "ignore_dirs": [],
+    "_zone_max_files": "rm --zone prints at most this many zone files before '… +k more'",
+    "zone_max_files": 40
+  },
+
+  "debug": {
+    "_min_similarity": "dbg open/similar flag a past bug when keyword overlap (0-1) reaches this and >=2 words are shared",
+    "min_similarity": 0.4
   },
 
   "verify": {

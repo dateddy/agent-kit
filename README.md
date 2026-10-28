@@ -19,9 +19,9 @@ All scripts are Python 3.9+ standard library only (PyYAML optional for YAML conf
 3. [A complete task, start to finish](#3-a-complete-task-start-to-finish)
 4. [Conventions you will see everywhere](#4-conventions-you-will-see-everywhere)
 5. [Skills](#5-skills)
-   - [starting-tasks](#starting-tasks--task) · [writing-plans](#writing-plans) · [keeping-notes](#keeping-notes)
-   - [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [economizing-context](#economizing-context)
-   - [tracking-experiments](#tracking-experiments) · [crafting-prompts](#crafting-prompts)
+   - [starting-tasks](#starting-tasks--task) · [grilling-designs](#grilling-designs-grill) · [writing-plans](#writing-plans) · [keeping-notes](#keeping-notes)
+   - [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [debugging-systematically](#debugging-systematically)
+   - [economizing-context](#economizing-context) · [tracking-experiments](#tracking-experiments) · [crafting-prompts](#crafting-prompts)
 6. [Side questions without polluting the task context](#6-side-questions-without-polluting-the-task-context)
 7. [Configuration reference](#7-configuration-reference)
 8. [Using other agents](#8-using-other-agents)
@@ -38,15 +38,17 @@ A **skill** is a folder with a `SKILL.md` (instructions for the agent) and optio
 agent-kit/
 ├── skills/
 │   ├── starting-tasks/        /task entry point: frame the request, ask what is missing
+│   ├── grilling-designs/      /grill design interview before planning, decisions recorded
 │   ├── writing-plans/         executor-ready plans, validated by plan.py
 │   ├── keeping-notes/         task state per branch + decision log (notes.py)
 │   ├── managing-git/          commit/branch/stash/merge/rebase/push with checks (gitkit.py)
 │   ├── verifying-changes/     one PASS/FAIL verdict from lint/typecheck/test (verify.py)
-│   ├── economizing-context/   repo map + capped command runner (repomap.py, run.py)
+│   ├── debugging-systematically/  code / data / llm debugging + bug journal (dbg.py)
+│   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
 │   ├── tracking-experiments/  training/eval run log tied to git commits (exp.py)
 │   └── crafting-prompts/      prompts for a target model from a spec, with tests (promptkit.py)
-├── templates/                 AGENTS.md, CLAUDE.md, commands/task.md
-├── tools/                     install.py, validate_skills.py
+├── templates/                 AGENTS.md, CLAUDE.md, commands/task.md, commands/grill.md
+├── tools/                     install.py, validate_skills.py, selftest.py
 └── .agentkit.example.json     default configuration
 ```
 
@@ -54,7 +56,7 @@ Token cost is layered (progressive disclosure):
 
 | Layer | When it is in context | Cost |
 |---|---|---|
-| `name` + `description` of each skill | Always | ~80–115 tokens per skill, ~800 for all eight |
+| `name` + `description` of each skill | Always | ~80–115 tokens per skill, ~1000 for all ten |
 | `SKILL.md` body | Only when the task matches | ~250–900 tokens |
 | `reference/*.md` | Only when that detail is needed | varies |
 | `scripts/*.py` | Never; they are run, and only their output enters context | output only |
@@ -74,7 +76,7 @@ What it does (safe to re-run; it never overwrites your files):
 |---|---|
 | `.agentkit/skills/<skill>/` | Canonical copy of every skill (agent-neutral; `AGENTS.md` points here) |
 | `.claude/skills/<skill>` | Symlink to the above so Claude Code discovers the skills (copied if symlinks are unavailable) |
-| `.claude/commands/task.md` | The `/task` command for Claude Code |
+| `.claude/commands/task.md`, `grill.md` | The `/task` and `/grill` commands for Claude Code |
 | `AGENTS.md` | Rules for every agent (created if missing; warns you to merge if you already have one) |
 | `CLAUDE.md` | `@AGENTS.md` plus Claude Code extras (prepends `@AGENTS.md` to an existing file) |
 | `.agentkit.json` | Configuration (created if missing) |
@@ -84,9 +86,12 @@ Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json
 
 To update the kit later, pull it and run `install.py` again.
 
+**Optional SessionStart hook (Claude Code only):** `python agent-kit/tools/install.py path/to/your-project --hooks` merges a hook into `.claude/settings.json` that runs `notes.py brief` when a session starts, resumes, clears or compacts, so the brief is already in context. It never overwrites existing keys or hooks, adds nothing if the same hook exists, and leaves a `settings.json` it cannot parse untouched (exit 2). Trade-off: one fewer turn per session (no manual `nt brief`) versus a Claude-Code-only mechanism and a few hundred tokens added to every session start, even for a question that does not need the brief. Without `--hooks` nothing changes, and the rule in `AGENTS.md` ("start of session: `nt brief`") works in every agent.
+
 User-wide install (skills only, every project, Claude Code): `python agent-kit/tools/install.py --user`.
 
 Check that the skills are well-formed and see their token cost: `python agent-kit/tools/validate_skills.py`.
+Prove the kit works on your machine: `python agent-kit/tools/selftest.py` (and `--cp1252` to simulate a Windows console). It builds throwaway git repos and runs the real scripts.
 
 ## 3. A complete task, start to finish
 
@@ -151,7 +156,7 @@ Out of scope: tuning hybrid weights.
 ## 5. Skills
 
 Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`):
-`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rm` repomap.py · `ex` exp.py · `pk` promptkit.py.
+`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rm` repomap.py · `ex` exp.py · `pk` promptkit.py · `dbg` dbg.py.
 
 You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
 
@@ -175,9 +180,38 @@ Out of scope: <what not to do now>
 | Situation | You type | What happens |
 |---|---|---|
 | Clear request | `/task Add BM25 fallback … Done when: …` | No questions; goes straight to planning |
-| Vague request | `/task make retrieval better` | One message with ≤3 questions, always including "how will we know it is done?" |
+| Vague request | `/task make retrieval better` | One message with ≤3 numbered questions, each asking exactly one thing and ending with `Recommended: X — reply 'ok' to accept`; always includes "how will we know it is done?" |
+| New public interface or schema, ≥3 modules, or an open design choice | `/task …` | After the frame, one line suggests `/grill`; it never runs on its own |
 | A task is already open on this branch | `/task …` | Asks: continue the open task, or start a new one (new branch)? |
 | You do not care about a field | Answer `skip` | The field is left empty |
+
+### grilling-designs (`/grill`)
+
+**What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rm`, `rm --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
+
+**How to invoke:** `/grill <feature>` (manual only: the skill has `disable-model-invocation: true`, so the agent never starts it by itself; `starting-tasks` just suggests it). In other agents, ask to be grilled on the design.
+
+**An exchange**
+
+```
+Q2/~6 · storage — Where should the index live?
+Recommended: build in memory at startup — 200 rows, so there is no file to keep in sync.
+Reply "ok" to accept, or tell me what you prefer.
+```
+
+Reply `ok` to accept. Reply `đủ rồi` or `enough` to stop: the questions left open become listed assumptions (recorded as one decision) and the agent moves on to the plan.
+
+**Commands used:** `nt decide --topic <area> --text … --why …` after each answer; `pl check` later validates the `Decisions: D-012, D-013` header (missing id → BLOCK, superseded id → WARN naming the replacement).
+
+**Scenarios**
+
+| Situation | What happens |
+|---|---|
+| `/grill add a feedback endpoint` | Reads the code first, then 4–8 single questions with recommendations |
+| You accept every default | Reply `ok` each time; each answer is already in `notes/decisions.md` |
+| You change your mind later | `nt decide … --supersedes D-012`; `pl check` warns if a plan still cites D-012 |
+| You are out of patience | `đủ rồi`: stops, lists assumptions, hands off to writing-plans |
+| A decision already exists for the topic | It is not asked again; the agent cites it |
 
 ### writing-plans
 
@@ -190,6 +224,7 @@ Out of scope: <what not to do now>
 Constraints: …
 Done when: …
 Out of scope: …
+Decisions: D-012, D-013          (optional, from /grill or nt decide)
 
 ## 1. <step title>
 Files: src/retrieval/bm25.py (new), tests/test_bm25.py (new)
@@ -206,6 +241,8 @@ Done: search("aspirin", 2) returns 2 docs containing "aspirin"
 | Every listed file exists, or is marked `(new)` | BLOCK otherwise (no hallucinated paths) |
 | No `TODO`, `TBD`, `???`, `<placeholder text>` | BLOCK |
 | Steps numbered 1..N | BLOCK |
+| `Decisions:` id not in `notes/decisions.md` | BLOCK |
+| `Decisions:` id that was superseded | WARN (names the replacement) |
 | Vague "Done" ("works correctly") | WARN |
 | Manual verification ("check visually") | WARN |
 | More than 8 steps, or a step over 800 characters | WARN (split it) |
@@ -314,14 +351,18 @@ test       FAIL   python -m pytest -q                   12.3s  log: .agentkit/lo
 --- test (5 lines; full log …)
 FAILED tests/test_hybrid.py::test_merge - AssertionError: expected fallback doc
 1 failed, 41 passed in 12.1s
-VERDICT: FAIL — fix the cause, re-run verify. Do not report the task as done.
+VERDICT: FAIL (exit 1) — fix the cause, re-run verify. Do not report the task as done.
 ```
 
-**Auto-detection:** ruff / flake8 / black / mypy / pyright / pytest (Python); `package.json` scripts and `tsc` (JS/TS, using the right package manager); `go vet`/`go test`; `cargo clippy`/`cargo test`; Makefile targets. Override any gate in `.agentkit.json`.
+The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHING VERIFIED (exit 2)`, `PASS WITH TEST CHANGES (exit 2)`) because agents lose exit codes through pipes. **Never pipe `vf`**; the VERDICT line is authoritative.
+
+**Auto-detection:** ruff / flake8 / black / mypy / pyright (Python, when configured); tests in `tests/` or `test/` are found even with no config file at all, and the runner is chosen by probing: if `python -m pytest --version` works it uses pytest, otherwise (for example a broken `pytest-cov` plugin) it falls back to `unittest discover` when the tests use `unittest.TestCase`, and says why in `--detect`; `package.json` scripts and `tsc` (JS/TS, using the right package manager); `go vet`/`go test`; `cargo clippy`/`cargo test`; Makefile targets. Override any gate in `.agentkit.json`.
 
 **Test-integrity guard:** compared to `HEAD`, it flags deleted test files, newly added `skip`/`xfail`/`.skip(` markers and removed assertions. If tests "pass" because they were weakened, the verdict is `PASS WITH TEST CHANGES` (exit 2) and the agent must show you the changes.
 
-**Commands:** `vf` (all gates) · `vf --only lint,test` (fast loop) · `vf --detect` (what would run and why) · `vf --no-guard`.
+**Fast inner loop:** `vf --affected` asks `rm --zone-from-diff` which tests can be affected by your changed files and runs only those (pytest paths or unittest modules). The verdict says `(affected only)`. No affected tests → `test SKIP no affected tests`. If repomap is missing or the runner is not pytest/unittest it runs the full test gate and says why. It is for iterating only: **a full `vf` is still required before a commit and before saying "done".**
+
+**Commands:** `vf` (all gates) · `vf --only lint,test` · `vf --affected` (inner loop) · `vf --detect` (what would run and why) · `vf --no-guard`.
 
 **Scenarios**
 
@@ -333,6 +374,39 @@ VERDICT: FAIL — fix the cause, re-run verify. Do not report the task as done.
 | Project has no tests | `NOTHING VERIFIED` (exit 2): the agent tells you and offers to add a test |
 | Wrong command detected | Set `"verify": {"test": "pytest tests/unit -q"}`, or `null` to skip a gate |
 | Slow integration tests | Agent iterates with `vf --only lint,test` on a unit command and runs the full `vf` before commit |
+| Large repo, one module edited | `vf --affected` runs only that module's tests; the full `vf` follows before commit |
+| Tests are `unittest` and pytest is broken | `vf` falls back to `unittest discover`; `vf --detect` shows the pytest error that caused it |
+
+### debugging-systematically
+
+**What it does:** stops guess-and-edit debugging. The agent classifies the failure first, follows that layer's procedure, and records the bug in an append-only journal (`notes/debug.jsonl`, committed) so a recurring bug is recognised.
+
+| Layer | Procedure |
+|---|---|
+| **code** (exception, wrong logic) | Reproduce with `run`, find the zone from the log (`rm --zone-from-log`), write a failing test first, fix, full `vf` |
+| **data** (bad or shifted inputs) | Inspect the real inputs first (schema, counts, a few samples) before touching code |
+| **llm** (wrong or invalid model output) | Capture the verbatim prompt, raw output and failing field; turn it into a prompt test case; fix the prompt, never loosen the parser |
+
+**Commands (`dbg`):**
+
+| Command | Purpose |
+|---|---|
+| `dbg open --layer code\|data\|llm --symptom "…" [--repro "<cmd>"]` | Start a bug (`B-001`); prints similar past bugs, a repeat is a WARN (exit 2) |
+| `dbg hypo B-001 "…" [--result confirmed\|rejected]` | Record one hypothesis and what testing it showed |
+| `dbg close B-001 --cause "…" [--fix <sha>]` | Close with the root cause; without `--cause` it BLOCKs (exit 1) |
+| `dbg list [--open] [--layer L]` | Show bugs |
+| `dbg similar "<text>"` | Keyword overlap with past bugs |
+| `dbg llm-case B-001 --spec prompts/x.spec.json --vars '{…}' --check '{…}'` | Append a test case to the crafting-prompts spec (vars must match the declared inputs; check types are validated) |
+
+**Scenarios**
+
+| Situation | What happens |
+|---|---|
+| Test fails with a traceback | `dbg open --layer code`; `run` the repro; `rm --zone-from-log` lists the files that matter; a failing test is written before the fix |
+| Retrieval returns nothing for Vietnamese queries | `--layer data`: inspect the documents (encoding, normalisation, counts) before changing the retriever |
+| The model invents a price | `--layer llm`: `dbg llm-case` adds the failing question with `not_contains` as a case; the prompt spec is changed and `pk test` re-run |
+| Same error as three weeks ago | `dbg open` prints the earlier bug and its cause as a WARN; the agent checks that cause first |
+| You try to close without knowing why | `dbg close` BLOCKs until a root cause is stated |
 
 ### economizing-context
 
@@ -354,6 +428,20 @@ $ rm --symbols src/vimed/retrieval/hybrid.py
    11-41      def search(self, query, k)
   → read a symbol with: sed -n 'START,ENDp' src/vimed/retrieval/hybrid.py
 ```
+
+**Blast radius, `rm --zone` (Python):** before editing a module, planning a refactor or debugging from a traceback, ask which files can be affected. The graph comes from `ast` (nothing is executed; `import a.b`, `from a import b`, relative imports and `src/` layouts are resolved).
+
+```
+$ rm --zone faq/search.py --hops 2
+SEEDS  faq/search.py
+dist  dir  path  lines  ~tok   (↑ imported-by · ↓ imports)
+   1  ↑    faq/__main__.py  38  ~371
+TESTS
+  tests/test_search.py
+zone 2 of 17 .py files · ~900 tok
+```
+
+`rm --zone-from-diff` uses the changed and untracked files as seeds; `rm --zone-from-log run.log` uses the repo files in a Python traceback; `--direction imports|importers|both`, `--hops N`, `--json` for other scripts. It prints paths, line counts and ~tokens only; the agent then reads zone files with `rm --symbols` and a line range. Dynamic imports (`importlib.import_module(name)`) are reported as `NOTE:` because they cannot be traced. Non-Python repos exit 2 with "zone supports Python only".
 
 Also `rm --big` lists the most expensive files (never read these whole). It honors `.gitignore` and skips `node_modules`, venvs, caches, `wandb`, `mlruns`, `checkpoints` and binaries.
 
@@ -378,6 +466,7 @@ TAIL (20):
 | `pip install -r requirements.txt` | Hundreds of "Collecting…" lines in context | One status line, or the error |
 | Training run with per-step logs | 10k+ lines in context for the rest of the session | Error + traceback + tail; grep the log for more |
 | Test suite with verbose output | Whole log repeated on every later turn | The failing tests only |
+| About to change `retrieval/hybrid.py` | Greps for callers, opens each | `rm --zone retrieval/hybrid.py`: importers, imports and their tests, as paths |
 
 ### tracking-experiments
 
@@ -469,6 +558,8 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | `notes.base_branch` | auto | Branch used by `nt sync` to detect merges |
 | `context.max_output_lines` | 60 | `run.py` prints outputs up to this length whole |
 | `context.ignore_dirs` | `[]` | Extra directories for `repomap.py` to skip (e.g., `"data"`) |
+| `context.zone_max_files` | 40 | Zone file lines `rm --zone` prints before "… +k more" |
+| `debug.min_similarity` | 0.4 | Keyword overlap (0–1) at which `dbg` calls two bugs similar |
 | `verify.format/lint/typecheck/test` | `auto` | `auto`, a command, or `null` to skip |
 | `experiments.dir`, `experiments.default_metrics` | `experiments`, `[]` | Run log location; columns for `ex list` |
 | `prompts.dir/provider/model/base_url/key_env` | `prompts`, `openai`, — | Defaults for `pk test` |
@@ -479,7 +570,7 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 - **Rules:** most agents read `AGENTS.md` at the repo root. Claude Code reads `CLAUDE.md`, which imports `AGENTS.md`.
 - **Skills:** `AGENTS.md` refers to scripts by path under `.agentkit/skills/`, so any agent that can run a terminal command can use them. Agents that support the SKILL.md format natively can also be pointed at `.agentkit/skills/`.
 - **Read-only mode:** for a series of questions, use your agent's read-only mode on top of the `?` prefix (Claude Code plan mode, Cursor Ask mode).
-- **Claude-Code-only extras:** `/task` as a slash command, `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
+- **Claude-Code-only extras:** `/task` and `/grill` as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
 
 ## 9. Troubleshooting
 
@@ -491,6 +582,8 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | YAML config in `ex run` fails | `pip install pyyaml`, or use a JSON config |
 | `nt brief` shows no task | You are on a branch without a task note (e.g., `main`); it lists open tasks to switch to |
 | Windows: no symlinks | The installer copies instead; re-run it after updating the kit |
+| Windows: garbled Vietnamese or `UnicodeEncodeError` | Update the kit: every script now switches stdout/stderr to UTF-8; `python tools/selftest.py --cp1252` checks it |
+| `vf` says `NOTHING VERIFIED` though tests exist | `vf --detect` shows the reason (for example `pytest not runnable: …`); set `verify.test` in `.agentkit.json` if detection is wrong |
 | `pk test` cannot connect | Check `--base-url` (include `/v1` for OpenAI-compatible servers) and that the key env var is set |
 
 ## 10. Adding your own skill
