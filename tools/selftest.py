@@ -232,6 +232,69 @@ def a4c(t: T):
     check(code == 0, f"exit {code}: {out[:300]}")
 
 
+# ================================================================ B1 zone
+def zone_json(d: Path, *args) -> tuple[int, dict, str]:
+    code, out = kit("rm", *args, "--json", cwd=d)
+    try:
+        return code, json.loads(out), out
+    except json.JSONDecodeError:
+        return code, {}, out
+
+
+@scenario("B1a", "zone: a->b->c chain, hops 2 lists b(1), a(2) as importers + their tests")
+def b1a(t: T):
+    d = t.repo(files={"a.py": "import b\n", "b.py": "import c\n", "c.py": "X = 1\n",
+                      "tests/test_a.py": "import a\n", "tests/test_c.py": "import c\n"})
+    code, j, out = zone_json(d, "--zone", "c.py", "--hops", "2")
+    check(code == 0 and j, f"exit {code}: {out[:300]}")
+    files = {f["path"]: (f["distance"], f["direction"]) for f in j["files"]}
+    check(files.get("b.py") == (1, "importers") and files.get("a.py") == (2, "importers"), f"files: {files}")
+    check({"tests/test_a.py", "tests/test_c.py"} <= set(j["tests"]), f"tests: {j['tests']}")
+    code, out = kit("rm", "--zone", "c", "--hops", "1", cwd=d)
+    check(code == 0 and "b.py" in out and "a.py" not in out.split("TESTS")[0].replace("SEEDS", ""),
+          f"text output (dotted seed, hops 1): {out[:300]}")
+
+
+@scenario("B1b", "zone: relative imports inside packages under src/ are resolved")
+def b1b(t: T):
+    d = t.repo(files={
+        "src/top/__init__.py": "", "src/top/pkg/__init__.py": "", "src/top/pkg/y.py": "VALUE = 1\n",
+        "src/top/pkg/z.py": "from . import y\n", "src/top/pkg/w.py": "from .y import VALUE\n",
+        "src/top/a/__init__.py": "", "src/top/a/m.py": "from ..pkg import y\n",
+    })
+    code, j, out = zone_json(d, "--zone", "src/top/pkg/y.py", "--hops", "1", "--direction", "importers")
+    got = {f["path"] for f in j.get("files", [])}
+    want = {"src/top/pkg/z.py", "src/top/pkg/w.py", "src/top/a/m.py"}
+    check(code == 0 and want <= got, f"want {sorted(want)}, got {sorted(got)}: {out[:200]}")
+    code, j, out = zone_json(d, "--zone", "top.a.m", "--hops", "1", "--direction", "imports")
+    check("src/top/pkg/y.py" in {f["path"] for f in j.get("files", [])}, f"dotted seed under src/: {out[:300]}")
+
+
+@scenario("B1c", "zone-from-log: seeds are repo frames only")
+def b1c(t: T):
+    d = t.repo(files={"pkg/__init__.py": "", "pkg/m.py": "import json\n", "pkg/n.py": "import pkg.m\n"})
+    log = t.base / "trace.log"
+    log.write_text(
+        "Traceback (most recent call last):\n"
+        f'  File "{(d / "pkg" / "n.py").resolve()}", line 1, in <module>\n    import pkg.m\n'
+        '  File "pkg/m.py", line 1, in <module>\n    import json\n'
+        r'  File "C:\Python313\Lib\json\__init__.py", line 106, in loads' + "\n"
+        '  File "/usr/lib/python3.11/json/decoder.py", line 3, in decode\nValueError: x\n', encoding="utf-8")
+    code, j, out = zone_json(d, "--zone-from-log", str(log), "--hops", "0")
+    check(code == 0 and sorted(j.get("seeds", [])) == ["pkg/m.py", "pkg/n.py"], f"seeds: {j.get('seeds')} / {out[:300]}")
+
+
+@scenario("B1d", "zone --json has the documented keys and reports dynamic imports")
+def b1d(t: T):
+    d = t.repo(files={"y.py": "V = 1\n",
+                      "x.py": "import importlib\nimport y\n\n\ndef f(n):\n    return importlib.import_module(n)\n"})
+    code, j, out = zone_json(d, "--zone", "y.py")
+    check(code == 0 and set(j) == {"seeds", "files", "tests", "notes"}, f"keys: {sorted(j)} / {out[:200]}")
+    check(any("dynamic import in x.py:6" in n for n in j["notes"]), f"notes: {j['notes']}")
+    code, out = kit("rm", "--zone", "y.py", cwd=d)
+    check("NOTE: dynamic import in x.py:6" in out and "import importlib" not in out, f"text: {out[:300]}")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252

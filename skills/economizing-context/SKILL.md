@@ -19,6 +19,19 @@ Paths: `python <this-skill>/scripts/repomap.py` (`rm`), `python <this-skill>/scr
 
 Skip entirely unless the task is about them: lockfiles, datasets, notebook outputs, generated/minified files, checkpoints, logs.
 
+## Blast radius: `rm --zone` (Python)
+
+Shows what a change can touch, from the import graph (`ast`, nothing executed): files that import it (↑), files it imports (↓), and the tests for them. Prints paths, lines and ~tokens only, never file contents.
+
+```
+rm --zone faq/search.py [more seeds] [--hops 2] [--direction both|imports|importers] [--json]
+rm --zone-from-diff           # seeds = changed + untracked .py files
+rm --zone-from-log run.log    # seeds = repo files in the traceback frames
+```
+
+Use it **before editing a module**, **when planning a refactor**, and **when debugging from a traceback**. Then read zone files like any other: `rm --symbols <file>` + a line range, never whole files.
+`NOTE: dynamic import …` means that edge is not traced; check it by grep. Exit 2 = not a Python repo.
+
 ## Running commands: wrap anything that may print >60 lines
 
 ```

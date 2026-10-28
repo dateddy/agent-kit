@@ -5,6 +5,12 @@
   repomap.py --big [N]                the N most expensive text files (read these by range only)
   repomap.py --symbols FILE [FILE…]   outline: classes/functions with line numbers (py, js/ts, md)
 
+  repomap.py --zone SEED [SEED…] [--hops 2] [--direction both|imports|importers] [--json]
+                                      blast radius of a file/module via the Python import graph
+  repomap.py --zone-from-diff [--hops 2] [--json]     seeds = changed + untracked .py files
+  repomap.py --zone-from-log LOGFILE [--hops 2]       seeds = repo files in Python traceback frames
+  (zone prints paths, line counts and ~tokens, never file contents)
+
 Honors .gitignore (via git ls-files) and context.ignore_dirs from .agentkit.json.
 Token estimate = bytes / 4 (rough; Vietnamese text runs ~1.5x higher).
 """
@@ -184,6 +190,234 @@ def cmd_symbols(paths: list[str]) -> int:
     return rc
 
 
+# ---------------------------------------------------------------- zone: blast radius via the import graph
+TEST_RE = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*\.py$|_test\.py$")
+ZONE_MAX_FILES = 40
+
+
+def zone_max(root: Path) -> int:
+    try:
+        return int(json.loads((root / ".agentkit.json").read_text(encoding="utf-8")).get("context", {})
+                   .get("zone_max_files", ZONE_MAX_FILES))
+    except Exception:
+        return ZONE_MAX_FILES
+
+
+def rel_of(root: Path, p: Path) -> str:
+    return p.relative_to(root).as_posix()
+
+
+def module_roots(root: Path, files: list[Path]) -> list[Path]:
+    """Dirs that top-level packages/modules are imported from: repo root, src/, parents of top-most packages."""
+    roots = [root]
+    if (root / "src").is_dir():
+        roots.append(root / "src")
+    for f in files:
+        d = f.parent
+        if d == root or not (d / "__init__.py").exists():
+            continue
+        while d.parent != root and (d.parent / "__init__.py").exists():
+            d = d.parent
+        if d.parent not in roots:
+            roots.append(d.parent)
+    return roots
+
+
+def module_name(f: Path, roots: list[Path]) -> str | None:
+    best = max((r for r in roots if r in f.parents), key=lambda r: len(r.parts), default=None)
+    if best is None:
+        return None
+    parts = list(f.relative_to(best).with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    if not parts or not all(p.isidentifier() for p in parts):
+        return None
+    return ".".join(parts)
+
+
+def parse_imports(f: Path, mod: str) -> tuple[set[str], list[tuple[int, str]]]:
+    """Candidate dotted names a file imports + dynamic imports we cannot trace. Never executes code."""
+    try:
+        tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError as e:
+        return set(), [(e.lineno or 0, "syntax error")]
+    pkg = mod if f.name == "__init__.py" else mod.rpartition(".")[0]
+    cands: set[str] = set()
+    notes: list[tuple[int, str]] = []
+    for nd in ast.walk(tree):
+        if isinstance(nd, ast.Import):
+            cands.update(a.name for a in nd.names)
+        elif isinstance(nd, ast.ImportFrom):
+            base = nd.module or ""
+            if nd.level:
+                parts = pkg.split(".") if pkg else []
+                if nd.level - 1 > len(parts):
+                    continue
+                parts = parts[:len(parts) - (nd.level - 1)]
+                base = ".".join(parts + ([base] if base else []))
+            if base:
+                cands.add(base)
+            cands.update(f"{base}.{a.name}" if base else a.name for a in nd.names if a.name != "*")
+        elif isinstance(nd, ast.Call):
+            fn = nd.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else ""
+            if name in ("import_module", "__import__"):
+                arg = nd.args[0] if nd.args else None
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and not arg.value.startswith("."):
+                    cands.add(arg.value)
+                else:
+                    notes.append((nd.lineno, f"dynamic import ({name})"))
+    return cands, notes
+
+
+class Graph:
+    def __init__(self, root: Path, ignore: set[str]):
+        self.root = root
+        self.files = sorted(f.resolve() for f in list_files(root)
+                            if f.suffix == ".py" and not (set(f.relative_to(root).parts[:-1]) & ignore))
+        roots = module_roots(root, self.files)
+        self.mod = {f: module_name(f, roots) for f in self.files}
+        index = {m: f for f, m in self.mod.items() if m}
+        self.imports: dict[Path, set[Path]] = {f: set() for f in self.files}
+        self.importers: dict[Path, set[Path]] = {f: set() for f in self.files}
+        self.notes: dict[Path, list[tuple[int, str]]] = {}
+        for f in self.files:
+            if not self.mod[f]:
+                continue
+            cands, self.notes[f] = parse_imports(f, self.mod[f])
+            for c in cands:
+                parts = c.split(".")
+                for i in range(1, len(parts) + 1):  # importing a.b.c also runs a/__init__ and a/b/__init__
+                    tgt = index.get(".".join(parts[:i]))
+                    if tgt and tgt != f:
+                        self.imports[f].add(tgt)
+                        self.importers[tgt].add(f)
+
+    def resolve_seed(self, s: str) -> Path | None:
+        for cand in (Path.cwd() / s, self.root / s):
+            if cand.is_file():
+                cand = cand.resolve()
+                return cand if cand in self.imports else None
+        return next((f for f, m in self.mod.items() if m == s), None)
+
+
+def bfs(starts: list[Path], adj: dict[Path, set[Path]], hops: int, root: Path) -> dict[Path, int]:
+    """Breadth-first distances; non-seed test files are neither listed nor expanded."""
+    dist = {s: 0 for s in starts}
+    frontier = list(starts)
+    for d in range(1, hops + 1):
+        nxt = []
+        for f in frontier:
+            for g in sorted(adj[f]):
+                if g not in dist and not TEST_RE.search(rel_of(root, g)):
+                    dist[g] = d
+                    nxt.append(g)
+        frontier = nxt
+    return dist
+
+
+def seeds_from_diff(g: Graph) -> list[Path]:
+    root = g.root
+    names = run("git", "diff", "--name-only", "HEAD", cwd=root) or run("git", "diff", "--name-only", "--cached", cwd=root)
+    names += "\n" + run("git", "ls-files", "--others", "--exclude-standard", cwd=root)
+    out = []
+    for n in names.splitlines():
+        p = (root / n.strip()).resolve() if n.strip().endswith(".py") else None
+        if p and p in g.imports and p not in out:
+            out.append(p)
+    return out
+
+
+def seeds_from_log(g: Graph, log: Path) -> list[Path]:
+    out = []
+    for m in re.finditer(r'File "([^"]+)", line \d+', log.read_text(encoding="utf-8", errors="replace")):
+        p = Path(m[1])
+        try:
+            p = (p if p.is_absolute() else g.root / p).resolve()
+        except OSError:
+            continue
+        if p in g.imports and p not in out:
+            out.append(p)
+    return out
+
+
+def cmd_zone(a, mode: str) -> int:
+    base = Path.cwd()
+    root = Path(run("git", "rev-parse", "--show-toplevel", cwd=base).strip() or base).resolve()
+    g = Graph(root, cfg_ignore(root))
+    if not g.files:
+        print("zone supports Python only — no .py files in this repo")
+        return 2
+    if mode == "zone":
+        seeds = []
+        for s in a.zone:
+            f = g.resolve_seed(s)
+            if f is None:
+                print(f"seed not found in the Python graph: {s}")
+                return 1
+            seeds.append(f)
+    elif mode == "diff":
+        seeds = seeds_from_diff(g)
+    else:
+        lp = Path(a.zone_from_log)
+        if not lp.is_file():
+            print(f"log not found: {lp}")
+            return 1
+        seeds = seeds_from_log(g, lp)
+
+    d_up = bfs(seeds, g.importers, a.hops, root) if a.direction in ("both", "importers") else {}
+    d_down = bfs(seeds, g.imports, a.hops, root) if a.direction in ("both", "imports") else {}
+    zone: dict[Path, tuple[int, str]] = {}
+    for f in set(d_up) | set(d_down):
+        if f in seeds:
+            continue
+        du, dd = d_up.get(f), d_down.get(f)
+        if dd is None or (du is not None and du < dd):
+            zone[f] = (du, "importers")
+        elif du is None or dd < du:
+            zone[f] = (dd, "imports")
+        else:
+            zone[f] = (du, "both")
+    members = set(seeds) | set(zone)
+    tests = sorted(t for t in g.files if TEST_RE.search(rel_of(root, t)) and (
+        t in members or g.imports[t] & members
+        or any(t.name == f"test_{m.stem}.py" for m in members if m.name != "__init__.py")))
+    notes = [f"{'syntax error' if txt == 'syntax error' else 'dynamic import'} in {rel_of(root, f)}:{ln} — not traced"
+             for f in sorted(members) for ln, txt in g.notes.get(f, [])]
+    ordered = sorted(zone.items(), key=lambda kv: (kv[1][0], rel_of(root, kv[0])))
+
+    if a.json:
+        print(json.dumps({"seeds": [rel_of(root, s) for s in seeds],
+                          "files": [{"path": rel_of(root, f), "distance": d, "direction": dr} for f, (d, dr) in ordered],
+                          "tests": [rel_of(root, t) for t in tests], "notes": notes}, ensure_ascii=False))
+        return 0
+    if not seeds:
+        print("no seeds found (nothing changed, or no repo .py file in the log)")
+        return 0
+
+    def size(f: Path) -> tuple[int, int]:
+        b = f.read_bytes()
+        return b.count(b"\n") + (not b.endswith(b"\n") and bool(b)), len(b)
+
+    arrow = {"importers": "↑", "imports": "↓", "both": "↑↓"}
+    cap = zone_max(root)
+    total = sum(size(f)[1] for f in list(seeds) + [f for f, _ in ordered])
+    print("SEEDS  " + ", ".join(rel_of(root, s) for s in seeds))
+    print("dist  dir  path  lines  ~tok   (↑ imported-by · ↓ imports)")
+    for f, (d, dr) in ordered[:cap]:
+        n, b = size(f)
+        print(f"{d:>4}  {arrow[dr]:<3}  {rel_of(root, f)}  {n}  ~{tok(b)}")
+    if len(ordered) > cap:
+        print(f"… +{len(ordered) - cap} more (raise --hops / narrow seeds)")
+    print("TESTS" + ("" if tests else "  (none found)"))
+    for t in tests[:cap]:
+        print("  " + rel_of(root, t))
+    for n in notes:
+        print("NOTE: " + n)
+    print(f"zone {len(members)} of {len(g.files)} .py files · ~{tok(total)} tok")
+    return 0
+
+
 def utf8_stdio() -> None:
     for s in (sys.stdout, sys.stderr):
         if hasattr(s, "reconfigure"):
@@ -197,7 +431,19 @@ def main() -> int:
     ap.add_argument("--depth", type=int, default=2)
     ap.add_argument("--big", type=int, nargs="?", const=10)
     ap.add_argument("--symbols", nargs="+", metavar="FILE")
+    ap.add_argument("--zone", nargs="+", metavar="SEED", help="file or dotted module")
+    ap.add_argument("--zone-from-diff", action="store_true")
+    ap.add_argument("--zone-from-log", metavar="LOGFILE")
+    ap.add_argument("--hops", type=int, default=2)
+    ap.add_argument("--direction", choices=("both", "imports", "importers"), default="both")
+    ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    if a.zone:
+        return cmd_zone(a, "zone")
+    if a.zone_from_diff:
+        return cmd_zone(a, "diff")
+    if a.zone_from_log:
+        return cmd_zone(a, "log")
     if a.symbols:
         return cmd_symbols(a.symbols)
     base = Path(a.path).resolve()
