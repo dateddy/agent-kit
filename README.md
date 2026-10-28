@@ -19,14 +19,16 @@ All scripts are Python 3.9+ standard library only (PyYAML optional for YAML conf
 3. [A complete task, start to finish](#3-a-complete-task-start-to-finish)
 4. [Conventions you will see everywhere](#4-conventions-you-will-see-everywhere)
 5. [Skills](#5-skills)
-   - [starting-tasks](#starting-tasks--task) · [grilling-designs](#grilling-designs-grill) · [writing-plans](#writing-plans) · [keeping-notes](#keeping-notes)
-   - [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [debugging-systematically](#debugging-systematically)
-   - [economizing-context](#economizing-context) · [tracking-experiments](#tracking-experiments) · [crafting-prompts](#crafting-prompts)
+   - Core: [writing-plans](#writing-plans) (Frame, lite path) · [keeping-notes](#keeping-notes) · [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [economizing-context](#economizing-context)
+   - Optional (`--with`): [grilling-designs](#grilling-designs-grill) · [debugging-systematically](#debugging-systematically) · [tracking-experiments](#tracking-experiments) · [crafting-prompts](#crafting-prompts)
 6. [Side questions without polluting the task context](#6-side-questions-without-polluting-the-task-context)
 7. [Configuration reference](#7-configuration-reference)
 8. [Using other agents](#8-using-other-agents)
 9. [Troubleshooting](#9-troubleshooting)
 10. [Adding your own skill](#10-adding-your-own-skill)
+11. [Git hooks](#11-git-hooks)
+12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
+13. [Changelog v3](#13-changelog-v3)
 
 ---
 
@@ -37,18 +39,18 @@ A **skill** is a folder with a `SKILL.md` (instructions for the agent) and optio
 ```
 agent-kit/
 ├── skills/
-│   ├── starting-tasks/        /task entry point: frame the request, ask what is missing
-│   ├── grilling-designs/      /grill design interview before planning, decisions recorded
-│   ├── writing-plans/         executor-ready plans, validated by plan.py
+│   ├── grilling-designs/      (optional) /grill design interview before planning, decisions recorded
+│   ├── writing-plans/         /task: frame the request, then executor-ready plans, validated by plan.py
 │   ├── keeping-notes/         task state per branch + decision log (notes.py)
-│   ├── managing-git/          commit/branch/stash/merge/rebase/push with checks (gitkit.py)
+│   ├── managing-git/          commit/branch/merge/rebase/push with checks (gitkit.py)
 │   ├── verifying-changes/     one PASS/FAIL verdict from lint/typecheck/test (verify.py)
-│   ├── debugging-systematically/  code / data / llm debugging + bug journal (dbg.py)
+│   ├── debugging-systematically/  (optional) code / data / llm debugging + bug journal (dbg.py)
 │   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
-│   ├── tracking-experiments/  training/eval run log tied to git commits (exp.py)
-│   └── crafting-prompts/      prompts for a target model from a spec, with tests (promptkit.py)
-├── templates/                 AGENTS.md, CLAUDE.md, commands/task.md, commands/grill.md
-├── tools/                     install.py, validate_skills.py, selftest.py
+│   ├── tracking-experiments/  (optional) training/eval run log tied to git commits (exp.py)
+│   └── crafting-prompts/      (optional) prompts for a target model from a spec, with tests (promptkit.py)
+├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, commands/grill.md
+├── tools/                     install.py, validate_skills.py, selftest.py, bench/ (benchmark harness)
+├── .github/workflows/         selftest.yml: 3 OSes x Python 3.9/3.13
 └── .agentkit.example.json     default configuration
 ```
 
@@ -56,7 +58,7 @@ Token cost is layered (progressive disclosure):
 
 | Layer | When it is in context | Cost |
 |---|---|---|
-| `name` + `description` of each skill | Always | ~80–115 tokens per skill, ~1000 for all ten |
+| `name` + `description` of each skill | Always | ~80–145 tokens per skill, ~515 for the five core skills |
 | `SKILL.md` body | Only when the task matches | ~250–900 tokens |
 | `reference/*.md` | Only when that detail is needed | varies |
 | `scripts/*.py` | Never; they are run, and only their output enters context | output only |
@@ -67,31 +69,51 @@ Token cost is layered (progressive disclosure):
 
 ```bash
 git clone <this repo> agent-kit
-python agent-kit/tools/install.py path/to/your-project
+python agent-kit/tools/install.py path/to/your-project                       # the five core skills
+python agent-kit/tools/install.py path/to/your-project --with experiments,prompts   # plus optional skills
+python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus enforcement by git hooks
 ```
+
+**Core and optional skills.** The default install is small on purpose: every installed skill costs its description in every session.
+
+| Set | Skills | How to get them |
+|---|---|---|
+| Core (always) | `writing-plans`, `keeping-notes`, `managing-git`, `verifying-changes`, `economizing-context` | default |
+| Optional | `tracking-experiments` · `crafting-prompts` · `grilling-designs` (`/grill`) · `debugging-systematically` | `--with experiments,prompts,grill,debug` |
+
+`AGENTS.md` and `CLAUDE.md` are generated from what is installed: the short-name lines (`nt`, `gk`, …) and the rules for a skill appear only when that skill is installed. Re-running the installer keeps and updates optional skills already present and regenerates the part of `AGENTS.md` above the `Project-specific rules` marker (your own rules below it are never touched).
+
+| Flag | Effect |
+|---|---|
+| `--with a,b` | Add optional skills (`experiments`, `prompts`, `grill`, `debug`); an unknown name exits 1 and lists the choices |
+| `--git-hooks` | Install `pre-commit` (`gitkit scan --staged`) and `commit-msg` (`gitkit lint-msg`) git hooks; see [Git hooks](#11-git-hooks) |
+| `--uninstall-git-hooks` | Remove only the blocks the kit added to those hooks |
+| `--hooks` | Claude Code SessionStart hook that runs `notes.py brief` (below) |
+| `--force` | Overwrite existing `.claude/skills/<name>` entries that are not links |
+| `--user` | Skills only, into `~/.claude/skills` (core + `--with`) |
 
 What it does (safe to re-run; it never overwrites your files):
 
 | Path in your project | Purpose |
 |---|---|
-| `.agentkit/skills/<skill>/` | Canonical copy of every skill (agent-neutral; `AGENTS.md` points here) |
+| `.agentkit/skills/<skill>/` | Canonical copy of the installed skills (agent-neutral; `AGENTS.md` points here) |
 | `.claude/skills/<skill>` | Symlink to the above so Claude Code discovers the skills (copied if symlinks are unavailable) |
-| `.claude/commands/task.md`, `grill.md` | The `/task` and `/grill` commands for Claude Code |
-| `AGENTS.md` | Rules for every agent (created if missing; warns you to merge if you already have one) |
+| `.claude/commands/task.md` (`grill.md` with `--with grill`) | The `/task` and `/grill` commands for Claude Code |
+| `AGENTS.md` | Rules for every agent, generated for the installed skills (created if missing; warns you to merge if you already have one without the project marker) |
 | `CLAUDE.md` | `@AGENTS.md` plus Claude Code extras (prepends `@AGENTS.md` to an existing file) |
 | `.agentkit.json` | Configuration (created if missing) |
 | `notes/decisions.md`, `.gitignore` rule for `notes/tasks/` | Notes layout |
 
 Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json` and `notes/decisions.md`. Logs (`.agentkit/logs/`, `experiments/logs/`, `prompts/runs/`) ignore themselves.
 
-To update the kit later, pull it and run `install.py` again.
+To update the kit later, pull it and run `install.py` again. An old `starting-tasks` skill (merged into `writing-plans` in v3) is removed, and an old `/task` command is rewritten to point at `writing-plans`.
 
 **Optional SessionStart hook (Claude Code only):** `python agent-kit/tools/install.py path/to/your-project --hooks` merges a hook into `.claude/settings.json` that runs `notes.py brief` when a session starts, resumes, clears or compacts, so the brief is already in context. It never overwrites existing keys or hooks, adds nothing if the same hook exists, and leaves a `settings.json` it cannot parse untouched (exit 2). Trade-off: one fewer turn per session (no manual `nt brief`) versus a Claude-Code-only mechanism and a few hundred tokens added to every session start, even for a question that does not need the brief. Without `--hooks` nothing changes, and the rule in `AGENTS.md` ("start of session: `nt brief`") works in every agent.
 
 User-wide install (skills only, every project, Claude Code): `python agent-kit/tools/install.py --user`.
 
 Check that the skills are well-formed and see their token cost: `python agent-kit/tools/validate_skills.py`.
-Prove the kit works on your machine: `python agent-kit/tools/selftest.py` (and `--cp1252` to simulate a Windows console). It builds throwaway git repos and runs the real scripts.
+Prove the kit works on your machine: `python agent-kit/tools/selftest.py` (and `--cp1252` to simulate a Windows console). It builds throwaway git repos and runs the real scripts, including the benchmark harness against a fake `claude` (the real one is never started). CI (`.github/workflows/selftest.yml`) runs the validator and both selftests on Ubuntu, Windows and macOS with Python 3.9 and 3.13.
 
 ## 3. A complete task, start to finish
 
@@ -136,7 +158,7 @@ Out of scope: tuning hybrid weights.
 | You type | Mode |
 |---|---|
 | `? why is the reranker slow` | Question mode: read-only. No edits, commits or note updates |
-| `/task …` or `task: …` | Start a task via starting-tasks |
+| `/task …` or `task: …` | Start a task: writing-plans, Frame phase first |
 | `add caching to the reranker` | Task mode |
 | Something ambiguous | Treated as a question; the agent offers to do it |
 
@@ -158,38 +180,15 @@ Out of scope: tuning hybrid weights.
 Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`):
 `nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rm` repomap.py · `ex` exp.py · `pk` promptkit.py · `dbg` dbg.py.
 
-You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
-
-### starting-tasks (`/task`)
-
-**What it does:** turns a request into a task frame (goal, constraints, done-when, out-of-scope), asks only for missing pieces, then hands off to writing-plans. Nothing is created or edited before you accept a plan.
-
-**How to invoke:** `/task <request>` in Claude Code; in other agents, start the message with `/task` or `task:`. Writing a plain feature request also works; `/task` just makes it explicit.
-
-**The frame:**
-
-```
-<Goal: the end result>                    required
-Constraints: <must not change / required tech>
-Done when: <how you will know it is finished>
-Out of scope: <what not to do now>
-```
-
-**Scenarios**
-
-| Situation | You type | What happens |
-|---|---|---|
-| Clear request | `/task Add BM25 fallback … Done when: …` | No questions; goes straight to planning |
-| Vague request | `/task make retrieval better` | One message with ≤3 numbered questions, each asking exactly one thing and ending with `Recommended: X — reply 'ok' to accept`; always includes "how will we know it is done?" |
-| New public interface or schema, ≥3 modules, or an open design choice | `/task …` | After the frame, one line suggests `/grill`; it never runs on its own |
-| A task is already open on this branch | `/task …` | Asks: continue the open task, or start a new one (new branch)? |
-| You do not care about a field | Answer `skip` | The field is left empty |
+`AGENTS.md` lists only the ones installed. You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
 
 ### grilling-designs (`/grill`)
 
+*Optional: `install.py --with grill`.*
+
 **What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rm`, `rm --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
 
-**How to invoke:** `/grill <feature>` (manual only: the skill has `disable-model-invocation: true`, so the agent never starts it by itself; `starting-tasks` just suggests it). In other agents, ask to be grilled on the design.
+**How to invoke:** `/grill <feature>` (manual only: the skill has `disable-model-invocation: true`, so the agent never starts it by itself; `writing-plans` just suggests it when grilling-designs is installed). In other agents, ask to be grilled on the design.
 
 **An exchange**
 
@@ -215,7 +214,30 @@ Reply `ok` to accept. Reply `đủ rồi` or `enough` to stop: the questions lef
 
 ### writing-plans
 
-**What it does:** produces a plan a cheaper model can execute without exploring the repo or making design decisions, and validates it with `pl check` before any code is written.
+**What it does:** frames a new task, then produces a plan a cheaper model can execute without exploring the repo or making design decisions, and validates it with `pl check` before any code is written. Nothing is created or edited before you accept a plan.
+
+**How to invoke:** `/task <request>` in Claude Code; in other agents, start the message with `/task` or `task:`. A plain feature request works too; `/task` just makes it explicit.
+
+**Frame phase** (replaces the old starting-tasks skill): `nt brief` first, then the agent fills
+
+```
+Goal:          <the end result>                    required
+Constraints:   <must not change / required tech>
+Done when:     <how you will know it is finished>
+Out of scope:  <what not to do now>
+```
+
+and asks only for what is missing, in one message, **at most 3 questions**, ranked by how much the answer changes the plan. Each question asks exactly one thing and ends with a default: `Recommended: BM25 — reply 'ok' to accept`. Answer `skip` to leave a field empty. The frame goes into the plan header.
+
+**Lite path:** a change that touches **2 files or fewer** and needs **no design decision** skips the plan file and the task note. The agent states the frame in a line or two, makes the change, and the normal rules still apply: `vf` must exit 0 after the last edit, and the commit goes through managing-git. A third file or an open design choice switches it back to the full plan.
+
+| Situation | You type | What happens |
+|---|---|---|
+| Clear request | `/task Add BM25 fallback … Done when: …` | No questions; goes straight to planning |
+| Vague request | `/task make retrieval better` | One message with ≤3 numbered single-topic questions, each with a recommended default; always asks how you will know it is done |
+| Small tweak in one file | `fix the typo in the CLI help` | Lite path: no plan file |
+| New public interface or schema, ≥3 modules, or an open design choice | `/task …` | If `grilling-designs` is installed, one line suggests `/grill`; it never runs on its own |
+| A task is already open on this branch | `/task …` | Asks: continue the open task, or start a new one (new branch)? |
 
 **Plan format:**
 
@@ -304,23 +326,22 @@ The agent updates the task note at plan-step boundaries and before commits, not 
 |---|---|---|
 | Commit message format, allowed types/scopes | How to group files into commits | Destructive operations |
 | Secret / large-file block | Subject and body wording | Committing directly on a protected branch |
-| Commit type when all files match a rule | feat vs fix vs refactor when the script says UNDECIDED | Merge vs rebase |
+| Allowed types, subject and body rules | Which type: feat, fix, refactor, … (guided by `reference/commit-examples.md`) | Merge vs rebase |
 | Conflict prediction, branch names | How to resolve a conflict hunk | Overriding a secret false-positive |
 
 **Commands**
 
 | Command | Purpose |
 |---|---|
-| `gk snapshot` | Compact state: branch, upstream ahead/behind, staged/unstaged/untracked, in-progress merge/rebase, stashes, recent log |
-| `gk diff [--staged] [paths]` | Size-capped diff that skips lockfiles, notebooks, generated and binary files |
-| `gk suggest --staged` | Rule-based type/scope (e.g., only `.md` files → `docs`) or `UNDECIDED` with hints |
-| `gk lint-msg FILE` / `-m "…"` | Conventional Commit check: type, scope, imperative mood, length, no trailing period, blank line 2, BREAKING footer |
-| `gk scan --staged` | Blocks private keys, API tokens (OpenAI/Anthropic/HF/GitHub/AWS/Google/Slack), hard-coded passwords, `.env`/`.pem` files, files over 5 MB |
+| `gk diff [--staged] [paths]` | Size-capped diff that skips lockfiles, notebooks, generated, binary and kit-managed files |
+| `gk lint-msg FILE` / `-m "…"` | Conventional Commit check: type, scope, imperative mood, length, no trailing period, blank line 2, BREAKING footer. Git-generated `Merge`, `Revert`, `fixup!`, `squash!` messages pass |
+| `gk scan --staged` | Blocks private keys, API tokens (OpenAI/Anthropic/HF/GitHub/AWS/Google/Slack), hard-coded passwords, `.env`/`.pem` files, files over 5 MB. Ignores kit-managed paths (`notes/`, `.agentkit/`, `.agentkit.json`, `experiments/runs.jsonl`, `prompts/runs/`) |
 | `gk branch-name feat "Thêm BM25 fallback" --ticket VMR-12` | → `feat/vmr-12-them-bm25-fallback` (Vietnamese diacritics stripped) |
 | `gk preflight commit\|switch\|merge X\|rebase X\|pull\|push\|stash-pop` | Safety check before the operation; predicts merge conflicts without touching the working tree |
-| `gk stashes` | Compact stash list |
 
-**Commit flow** (what happens when you say "commit"): snapshot → group changes by concern (asks you if more than one commit is needed) → stage explicit paths → `preflight commit` → `scan --staged` → `suggest` → capped diff → write message → `lint-msg` until clean → commit.
+State comes from plain git (`git status -sb`, `git log --oneline -5`, `git stash list`); v3 removed `gk snapshot`, `gk suggest` and `gk stashes`.
+
+**Commit flow** (what happens when you say "commit"): `git status -sb` → group changes by concern (asks you if more than one commit is needed) → stage explicit paths → `preflight commit` → `scan --staged` → capped diff → pick the type, write the message → `lint-msg` until clean → commit. **Code + its tests + its doc line is one commit**, never split and never a question to you. If the repo has the [git hooks](#11-git-hooks), `git commit` runs `scan` and `lint-msg` itself.
 
 **Scenarios**
 
@@ -328,7 +349,7 @@ The agent updates the task note at plan-step boundaries and before commits, not 
 |---|---|
 | "commit" while on `main` | `preflight` returns WARN; the agent asks: commit to `main`, or create a task branch? (configurable: `git.protected_commit` = `ask` / `allow` / `block`) |
 | An API key is in a staged file | `scan` blocks; the agent unstages it and suggests loading it from an env var. If you say it is a false positive, you decide |
-| Changes mix a feature, a docs fix and a dependency bump | `suggest` warns about mixed categories; the agent proposes three commits |
+| Changes mix a feature, an unrelated docs fix and a dependency bump | The agent proposes three commits; a feature with its own tests and doc line stays one |
 | "merge develop into my branch" | `preflight merge develop` lists files that will conflict before anything happens |
 | Rebasing a branch you already pushed | WARN: rewrites shared history; needs `--force-with-lease`, which the agent asks before using |
 | Need to switch branches with unfinished work | `preflight switch` warns; the agent stashes with a message and restores later with apply → verify → drop |
@@ -378,6 +399,8 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 | Tests are `unittest` and pytest is broken | `vf` falls back to `unittest discover`; `vf --detect` shows the pytest error that caused it |
 
 ### debugging-systematically
+
+*Optional: `install.py --with debug`.*
 
 **What it does:** stops guess-and-edit debugging. The agent classifies the failure first, follows that layer's procedure, and records the bug in an append-only journal (`notes/debug.jsonl`, committed) so a recurring bug is recognised.
 
@@ -470,6 +493,8 @@ TAIL (20):
 
 ### tracking-experiments
 
+*Optional: `install.py --with experiments`.*
+
 **What it does:** records every training/eval/benchmark run (git SHA, branch, uncommitted-change count, config, params, metrics, duration, exit code, log) in `experiments/runs.jsonl`, so questions about results are answered from data.
 
 **Commands**
@@ -496,6 +521,8 @@ Your training script only has to write its final metrics to a JSON/YAML file (or
 | Results from Colab / a GPU server | `log this run: f1 0.81, lr 1e-4, colab` | `ex log …` |
 
 ### crafting-prompts
+
+*Optional: `install.py --with prompts`.*
 
 **What it does:** builds prompts for the **target model your code calls** (not the agent) from a JSON spec. The script finds missing information and turns it into precise questions, renders a layout suited to the model family, lints the wording, and tests cases against an API.
 
@@ -570,7 +597,7 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 - **Rules:** most agents read `AGENTS.md` at the repo root. Claude Code reads `CLAUDE.md`, which imports `AGENTS.md`.
 - **Skills:** `AGENTS.md` refers to scripts by path under `.agentkit/skills/`, so any agent that can run a terminal command can use them. Agents that support the SKILL.md format natively can also be pointed at `.agentkit/skills/`.
 - **Read-only mode:** for a series of questions, use your agent's read-only mode on top of the `?` prefix (Claude Code plan mode, Cursor Ask mode).
-- **Claude-Code-only extras:** `/task` and `/grill` as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
+- **Claude-Code-only extras:** `/task` (and `/grill` with `--with grill`) as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
 
 ## 9. Troubleshooting
 
@@ -583,6 +610,7 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | `nt brief` shows no task | You are on a branch without a task note (e.g., `main`); it lists open tasks to switch to |
 | Windows: no symlinks | The installer copies instead; re-run it after updating the kit |
 | Windows: garbled Vietnamese or `UnicodeEncodeError` | Update the kit: every script now switches stdout/stderr to UTF-8; `python tools/selftest.py --cp1252` checks it |
+| A commit is rejected by a git hook | Read the `BLOCK:`/`ERROR:` lines the hook printed, fix the cause (remove the secret, reword the message) and commit again. Never `--no-verify` |
 | `vf` says `NOTHING VERIFIED` though tests exist | `vf --detect` shows the reason (for example `pytest not runnable: …`); set `verify.test` in `.agentkit.json` if detection is wrong |
 | `pk test` cannot connect | Check `--base-url` (include `/v1` for OpenAI-compatible servers) and that the key env var is set |
 
@@ -592,6 +620,71 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 2. Keep the body under ~150 lines. Move detail to `reference/*.md` (one level deep, linked from SKILL.md).
 3. Put rule-based logic in `scripts/` (stdlib only, `--help`, exit codes 0/1/2, explicit error messages that say how to fix). Let the model handle only what needs judgment.
 4. Run `python tools/validate_skills.py`, then `python tools/install.py <project>`.
+
+## 11. Git hooks
+
+Rules in `AGENTS.md` are advice; hooks make them binding for any agent, and for you.
+
+```bash
+python agent-kit/tools/install.py path/to/your-project --git-hooks
+python agent-kit/tools/install.py path/to/your-project --uninstall-git-hooks
+```
+
+| Hook | Runs | Effect |
+|---|---|---|
+| `pre-commit` | `gitkit.py scan --staged` | A secret, a `.env`/key file or an oversized file in the staged changes rejects the commit |
+| `commit-msg` | `gitkit.py lint-msg "$1"` | A message that is not a valid Conventional Commit rejects the commit; `Merge`, `Revert`, `fixup!`, `squash!` pass |
+
+- Only exit code `1` (BLOCK) rejects the commit; a WARN (`2`) passes. The hook skips silently when `.agentkit/skills/managing-git` is not there.
+- **Never overwrites a hook you already have.** The kit adds a block between `# >>> agent-kit >>>` and `# <<< agent-kit <<<` right after the shebang (so an `exit 0` at the end of your hook cannot skip it), and does nothing if the block is already there. A hook in another language (Python, Node) is left untouched with a WARN and the exact command to call by hand.
+- Honours `core.hooksPath` and works in Git for Windows' `sh`. The block runs the Python that ran the installer (absolute path), falling back to `python3`, `python`, then `py -3`.
+- `--uninstall-git-hooks` removes only those blocks; a hook the kit created itself is deleted, yours is restored byte for byte.
+- Agents must never use `--no-verify`: a hook BLOCK is fixed, not bypassed (stated in `AGENTS.md` and managing-git).
+
+## 12. Benchmark: does the kit help?
+
+`tools/bench/bench.py` runs the same tasks headless with Claude Code under three conditions and measures what changes. It only ever works in throwaway `git clone`s under the temp dir (it refuses to run inside the fixture or in this repo, and removes the clone's `origin`).
+
+| Condition | The copy gets |
+|---|---|
+| `none` | `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agentkit/`, `.agentkit.json`, `notes/` removed |
+| `rules` | `none` plus `templates/AGENTS.rules-only.md` (mode, token and safety rules, no scripts) |
+| `kit` | `none` plus `install.py --git-hooks` (core skills, plus the task's `with`) |
+
+```bash
+python tools/bench/bench.py overhead --fixture path/to/repo --model sonnet --trials 3
+python tools/bench/bench.py run --fixture path/to/repo --tasks tools/bench/tasks --conditions none,rules,kit \
+       --trials 3 --model sonnet --max-turns 60 --max-budget-usd 2 --out bench/results.jsonl --only T1 --yes
+python tools/bench/bench.py report bench/results.jsonl --csv bench/summary.csv
+```
+
+- **Cost:** `run` prints the worst case (sessions × `--max-budget-usd`) and exits 2 until you add `--yes`. `bench/` is gitignored.
+- **Task folder** `tasks/<ID>/`: `task.md` (a line `---new-session---` starts a *new* `claude -p` session, not `--resume`, which tests resuming from notes), `meta.json` (`max_turns_per_session`, `with`, `oracle_cmd`), `oracle/` (hidden tests, copied in only after the agent finishes). `T1` is an example for the mini-faq-rag fixture.
+- **Isolation:** sessions run with `--setting-sources project,local --strict-mcp-config`, so your own user-level skills and MCP servers do not leak into the comparison (`--no-isolate` to include them). On the author's machine this cut the fixed context of an empty prompt from about 23.7k to 6.9k tokens. The prompt goes on stdin because npm's `claude.cmd` mangles multi-line arguments on Windows.
+- **Recorded per run** (one JSON line): success (oracle exit 0), input / output / cache-creation / cache-read tokens, cost, turns, duration, tool calls by name, `kit_calls` (kit scripts invoked, by script), loaded skills, and six violations: `secret_in_history`, `tests_modified` (fixture tests edited or deleted, or skip/xfail added), `commits_on_protected`, `bad_commit_msgs`, `uncommitted_changes`, `no_verify_used`.
+- **`overhead`** sends `Reply with exactly: ok` per condition and reports the first message's input + cache-creation tokens: the fixed price of the rules and skill descriptions.
+- **`report`** prints, per task and condition then overall: success rate, median and min–max total tokens (input + output + cache creation), median cache-read, cost and turns, violation totals, each with its delta against `none`.
+
+The selftest runs all of this against a fake `claude` on `PATH` that emits canned stream-json; neither the selftest nor CI starts the real one.
+
+## 13. Changelog v3
+
+**Fixed (Windows field test)** — most of this landed in the v2 branch and is covered by the selftest:
+- Every script switches stdout/stderr to UTF-8 (`errors="replace"`); `validate_skills.py` fails a script that does not. Child processes are decoded as UTF-8 and given `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`.
+- `verify.py` finds `tests/`, `test/` or root `test_*.py` without any config file, probes `python -m pytest --version`, falls back to `unittest discover`, and prints verdicts with their exit code (`PASS (exit 0)`, `NOTHING VERIFIED (exit 2)`, …).
+- `gk scan` and `gk diff` ignore kit-managed paths; the false "mixed categories" WARN is gone with `suggest`.
+- Clarifying questions: one thing each, a recommended default, at most 3.
+
+**Changed (breaking)** — re-run `install.py` on each project to migrate:
+- `starting-tasks` is merged into `writing-plans` (Frame phase and lite path). The installer removes the old skill and rewrites `.claude/commands/task.md`.
+- `gitkit.py suggest`, `snapshot` and `stashes` are removed; use `git status -sb`, `git log --oneline -5`, `git stash list`.
+- The default install is the five core skills; `tracking-experiments`, `crafting-prompts`, `grilling-designs` and `debugging-systematically` need `--with experiments,prompts,grill,debug`. A re-run keeps optional skills that are already installed.
+- `AGENTS.md` is generated from the installed skills.
+
+**Added**
+- `install.py --git-hooks` / `--uninstall-git-hooks` (see [Git hooks](#11-git-hooks)); `lint-msg` accepts `fixup!`, `squash!`, `amend!` and ignores the `git commit -v` scissors section.
+- `tools/selftest.py` (35 scenarios, `--cp1252`) and GitHub Actions CI on 3 OSes × Python 3.9 / 3.13.
+- `tools/bench/` benchmark harness with a fake `claude` for tests ([Benchmark](#12-benchmark-does-the-kit-help)).
 
 ## Credits
 
