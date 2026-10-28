@@ -1,0 +1,58 @@
+{
+  "_comment": "Copied to <repo>/.agentkit.json by install.py. Every key is optional; scripts fall back to these defaults. Keys starting with _ are comments.",
+
+  "git": {
+    "protected_branches": ["main", "master", "develop", "release/*"],
+    "_protected_commit": "ask = agent must get your yes (default) | allow = no question | block = always refuse",
+    "protected_commit": "ask",
+    "branch_pattern": "{type}/{ticket}{slug}",
+    "branch_types": ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "ci", "hotfix", "exp"],
+    "commit_types": ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"],
+    "scopes": [],
+    "strict_scopes": false,
+    "subject_max": 72,
+    "body_wrap": 100,
+    "max_file_mb": 5,
+    "diff_ignore": ["*.lock", "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "*.min.js", "*.map", "*.ipynb", "dist/*", "build/*"]
+  },
+
+  "notes": {
+    "dir": "notes",
+    "_commit_tasks": "false = notes/tasks/ (task notes + plans) is gitignored; decisions.md is committed",
+    "commit_tasks": false,
+    "max_decision_chars": 600,
+    "max_decision_lines": 10,
+    "base_branch": null
+  },
+
+  "context": {
+    "max_output_lines": 60,
+    "_ignore_dirs": "added to the built-in list (.git, node_modules, .venv, __pycache__, dist, build, wandb, mlruns, checkpoints …)",
+    "ignore_dirs": []
+  },
+
+  "verify": {
+    "_comment": "\"auto\" = detect · a command string = use it · null = skip this gate",
+    "format": "auto",
+    "lint": "auto",
+    "typecheck": "auto",
+    "test": "auto"
+  },
+
+  "experiments": {
+    "dir": "experiments",
+    "_default_metrics": "columns shown by `exp.py list`, e.g. [\"eval.f1\", \"eval.recall@5\"]",
+    "default_metrics": []
+  },
+
+  "prompts": {
+    "dir": "prompts",
+    "_provider": "openai (any OpenAI-compatible server) | anthropic",
+    "provider": "openai",
+    "model": null,
+    "base_url": null,
+    "key_env": null,
+    "max_tokens_warn": 3000,
+    "timeout_s": 120
+  }
+}

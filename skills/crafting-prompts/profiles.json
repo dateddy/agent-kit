@@ -1,0 +1,41 @@
+{
+  "_comment": "Render profiles per target model family. Override or add profiles in <repo>/prompts/profiles.json (same shape).",
+  "generic": {
+    "style": "markdown",
+    "long_inputs_first": false,
+    "examples": "optional",
+    "repeat_format_at_end": false,
+    "banned_phrases": []
+  },
+  "claude": {
+    "style": "xml",
+    "long_inputs_first": true,
+    "examples": "optional",
+    "repeat_format_at_end": false,
+    "banned_phrases": []
+  },
+  "gpt": {
+    "style": "markdown",
+    "long_inputs_first": false,
+    "examples": "optional",
+    "repeat_format_at_end": false,
+    "banned_phrases": []
+  },
+  "open-small": {
+    "_comment": "Qwen, Llama, Gemma, Vistral and other small open models: short numbered rules, mandatory examples, restate the format last.",
+    "style": "markdown",
+    "long_inputs_first": true,
+    "examples": "required",
+    "repeat_format_at_end": true,
+    "max_instructions": 8,
+    "banned_phrases": []
+  },
+  "reasoning": {
+    "_comment": "Models that reason internally: give goal and criteria, not thinking procedures.",
+    "style": "markdown",
+    "long_inputs_first": true,
+    "examples": "optional",
+    "repeat_format_at_end": false,
+    "banned_phrases": ["step by step", "think carefully", "chain of thought", "show your reasoning", "từng bước"]
+  }
+}
