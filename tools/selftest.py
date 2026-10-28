@@ -562,6 +562,20 @@ def commit_try(d: Path, msg: str, files: dict, t: T) -> tuple[int, str]:
     return run(["git", "commit", "-q", "-m", msg], d)
 
 
+@scenario("B3p", "hooks without a Python interpreter warn on stderr that scan and lint were SKIPPED, and still pass")
+def b3p(t: T):
+    d = hooked_repo(t, "np")
+    for name in ("pre-commit", "commit-msg"):
+        hook = d / ".git" / "hooks" / name
+        text = hook.read_text(encoding="utf-8")
+        text = re.sub(r"^ak_py=.*$", "ak_py=/nonexistent/python", text, flags=re.M)
+        text = "\n".join(l for l in text.splitlines() if not l.startswith("  elif command -v")) + "\n"
+        hook.write_bytes(text.encode("utf-8"))
+    code, out = commit_try(d, "bad message", {"a.txt": "x\n"}, t)
+    check(code == 0, f"commit must still pass, exit {code}: {out[-300:]}")
+    check(out.count("python not found") == 2 and "SKIPPED" in out, f"warning missing: {out[-300:]}")
+
+
 @scenario("B3a", "--git-hooks keeps an existing hook, adds the block once (also under core.hooksPath)")
 def b3a(t: T):
     d = t.repo("a", files={".git-keep": ""})

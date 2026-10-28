@@ -165,7 +165,7 @@ def hook_block(name: str) -> str:
         '  elif command -v python3 >/dev/null 2>&1; then python3 "$@"',
         '  elif command -v python >/dev/null 2>&1; then python "$@"',
         '  elif command -v py >/dev/null 2>&1; then py -3 "$@"',
-        '  else return 0; fi',
+        '  else echo "agent-kit: python not found — secret scan and commit lint SKIPPED" >&2; return 0; fi',
         "}",
         "ak_rc=0",
         'if [ -f "$ak_gk" ]; then',
