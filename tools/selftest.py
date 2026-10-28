@@ -259,7 +259,7 @@ def zone_json(d: Path, *args) -> tuple[int, dict, str]:
         return code, {}, out
 
 
-@scenario("B1a", "zone: a->b->c chain, hops 2 lists b(1), a(2) as importers + their tests")
+@scenario("Z1", "zone: a->b->c chain, hops 2 lists b(1), a(2) as importers + their tests")
 def b1a(t: T):
     d = t.repo(files={"a.py": "import b\n", "b.py": "import c\n", "c.py": "X = 1\n",
                       "tests/test_a.py": "import a\n", "tests/test_c.py": "import c\n"})
@@ -273,7 +273,7 @@ def b1a(t: T):
           f"text output (dotted seed, hops 1): {out[:300]}")
 
 
-@scenario("B1b", "zone: relative imports inside packages under src/ are resolved")
+@scenario("Z2", "zone: relative imports inside packages under src/ are resolved")
 def b1b(t: T):
     d = t.repo(files={
         "src/top/__init__.py": "", "src/top/pkg/__init__.py": "", "src/top/pkg/y.py": "VALUE = 1\n",
@@ -288,7 +288,7 @@ def b1b(t: T):
     check("src/top/pkg/y.py" in {f["path"] for f in j.get("files", [])}, f"dotted seed under src/: {out[:300]}")
 
 
-@scenario("B1c", "zone-from-log: seeds are repo frames only")
+@scenario("Z3", "zone-from-log: seeds are repo frames only")
 def b1c(t: T):
     d = t.repo(files={"pkg/__init__.py": "", "pkg/m.py": "import json\n", "pkg/n.py": "import pkg.m\n"})
     log = t.base / "trace.log"
@@ -302,7 +302,7 @@ def b1c(t: T):
     check(code == 0 and sorted(j.get("seeds", [])) == ["pkg/m.py", "pkg/n.py"], f"seeds: {j.get('seeds')} / {out[:300]}")
 
 
-@scenario("B1d", "zone --json has the documented keys and reports dynamic imports")
+@scenario("Z4", "zone --json has the documented keys and reports dynamic imports")
 def b1d(t: T):
     d = t.repo(files={"y.py": "V = 1\n",
                       "x.py": "import importlib\nimport y\n\n\ndef f(n):\n    return importlib.import_module(n)\n"})
@@ -326,7 +326,7 @@ def affected_repo(t: T, name: str) -> Path:
     return d
 
 
-@scenario("B2a", "vf --affected runs only the tests in the changed file's zone")
+@scenario("AF1", "vf --affected runs only the tests in the changed file's zone")
 def b2a(t: T):
     d = affected_repo(t, "r")
     code, out = kit("vf", cwd=d)
@@ -335,7 +335,7 @@ def b2a(t: T):
     check(code == 0 and "VERDICT: PASS (exit 0) (affected only)" in out, f"exit {code}: {out[:400]}")
 
 
-@scenario("B2b", "vf --affected without repomap falls back to the full test gate and says why")
+@scenario("AF2", "vf --affected without repomap falls back to the full test gate and says why")
 def b2b(t: T):
     d = affected_repo(t, "r")
     lone = t.sub("lone") / "verifying-changes"
@@ -364,7 +364,7 @@ def decided_repo(t: T, supersede: bool = False) -> Path:
     return d
 
 
-@scenario("B3a", "plan check: an existing Decisions id passes")
+@scenario("DC1", "plan check: an existing Decisions id passes")
 def b3a(t: T):
     d = decided_repo(t)
     t.write(d, {"plan.md": plan_with("D-001")})
@@ -372,7 +372,7 @@ def b3a(t: T):
     check(code == 0, f"exit {code}: {out[:300]}")
 
 
-@scenario("B3b", "plan check: a missing Decisions id BLOCKs")
+@scenario("DC2", "plan check: a missing Decisions id BLOCKs")
 def b3b(t: T):
     d = decided_repo(t)
     t.write(d, {"plan.md": plan_with("D-001, D-099")})
@@ -380,7 +380,7 @@ def b3b(t: T):
     check(code == 1 and "D-099" in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("B3c", "plan check: a superseded Decisions id WARNs and names the replacement")
+@scenario("DC3", "plan check: a superseded Decisions id WARNs and names the replacement")
 def b3c(t: T):
     d = decided_repo(t, supersede=True)
     t.write(d, {"plan.md": plan_with("D-001")})
@@ -388,7 +388,7 @@ def b3c(t: T):
     check(code == 2 and "D-002" in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("B3d", "install copies the grilling-designs skill and /grill command")
+@scenario("DC4", "install copies the grilling-designs skill and /grill command")
 def b3d(t: T):
     d = t.repo()
     code, out = kit("install", str(d), cwd=t.base)
@@ -401,7 +401,7 @@ def b3d(t: T):
 
 
 # ================================================================ B4 dbg
-@scenario("B4a", "dbg open/hypo/close round trip; list shows the closed bug with its cause")
+@scenario("DB1", "dbg open/hypo/close round trip; list shows the closed bug with its cause")
 def b4a(t: T):
     d = t.repo()
     sha = git(d, "rev-parse", "HEAD").strip()
@@ -418,7 +418,7 @@ def b4a(t: T):
     check("no bugs open" in out, f"list --open: {out[:200]}")
 
 
-@scenario("B4b", "dbg close without --cause BLOCKs")
+@scenario("DB2", "dbg close without --cause BLOCKs")
 def b4b(t: T):
     d = t.repo()
     kit("dbg", "open", "--layer", "data", "--symptom", "row count drops after join", cwd=d)
@@ -428,7 +428,7 @@ def b4b(t: T):
     check("B-001" in out, "bug must stay open")
 
 
-@scenario("B4c", "a second open with a similar symptom WARNs and names the earlier bug")
+@scenario("DB3", "a second open with a similar symptom WARNs and names the earlier bug")
 def b4c(t: T):
     d = t.repo()
     kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer when parsing model output json", cwd=d)
@@ -438,7 +438,7 @@ def b4c(t: T):
     check(code == 0, f"unrelated bug should not warn: exit {code}: {out[:200]}")
 
 
-@scenario("B4d", "dbg llm-case appends a valid case; promptkit check still passes; bad vars BLOCK")
+@scenario("DB4", "dbg llm-case appends a valid case; promptkit check still passes; bad vars BLOCK")
 def b4d(t: T):
     spec = {"name": "qa", "target": "generic", "goal": "Answer the question from the documents.",
             "inputs": [{"name": "question", "description": "user question"}],
@@ -463,7 +463,7 @@ def b4d(t: T):
 HOOK = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 
 
-@scenario("B5a", "install --hooks twice: hook present once, existing settings preserved")
+@scenario("SS1", "install --hooks twice: hook present once, existing settings preserved")
 def b5a(t: T):
     existing = {"permissions": {"allow": ["Bash(ls)"]},
                 "hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "echo hi"}]}],
@@ -480,7 +480,7 @@ def b5a(t: T):
     check(got["hooks"]["SessionStart"][0] == existing["hooks"]["SessionStart"][0], "existing hook entry changed")
 
 
-@scenario("B5b", "install without --hooks writes no settings.json; invalid settings.json is left untouched (exit 2)")
+@scenario("SS2", "install without --hooks writes no settings.json; invalid settings.json is left untouched (exit 2)")
 def b5b(t: T):
     d = t.repo(name="plain")
     code, out = kit("install", str(d), cwd=t.base)
@@ -498,6 +498,19 @@ def v(t: T):
     oks = [l for l in out.splitlines() if l.startswith("ok ")]
     check(code == 0 and len(oks) == 10 and "FAIL" not in out and "ERROR" not in out,
           f"exit {code}, {len(oks)} ok lines: {out[:400]}")
+
+
+# ================================================================ H every script answers --help
+@scenario("H", "every script answers --help with exit 0 under a cp1252 console")
+def h(t: T):
+    scripts = sorted([*SK.glob("*/scripts/*.py"), *(KIT / "tools").glob("*.py"), *(KIT / "tools" / "bench").glob("*.py")])
+    check(len(scripts) >= 10, f"found only {len(scripts)} scripts")
+    bad = []
+    for py in scripts:
+        code, out = run([sys.executable, py, "--help"], t.base, force_cp1252=True)
+        if code != 0 or "UnicodeEncodeError" in out:
+            bad.append(f"{py.name}: exit {code} {out.strip()[:80]}")
+    check(not bad, "; ".join(bad))
 
 
 # ================================================================ runner
@@ -523,11 +536,11 @@ def main() -> int:
         t.base.mkdir(parents=True)
         try:
             fn(t)
-            rows.append(f"PASS · {sid:4} · {title}")
+            rows.append(f"PASS · {sid:5} · {title}")
         except Exception as e:  # noqa: BLE001 - a scenario must never take the runner down
             failed += 1
             detail = str(e) if isinstance(e, Fail) else traceback.format_exc(limit=3)
-            rows.append(f"FAIL · {sid:4} · {title}")
+            rows.append(f"FAIL · {sid:5} · {title}")
             rows += ["        " + l for l in detail.strip().splitlines()[:6]]
     print("\n".join(rows))
     print(f"\n{len(todo) - failed}/{len(todo)} passed" + (" (cp1252 console)" if CP1252 else ""))

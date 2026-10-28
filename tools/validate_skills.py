@@ -7,6 +7,7 @@ Exit 1 if any ERROR.  Usage: python tools/validate_skills.py [skills_dir]
 """
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
@@ -88,7 +89,10 @@ def utf8_stdio() -> None:
 
 def main() -> int:
     utf8_stdio()
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "skills"
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("skills_dir", nargs="?", help="default: <kit>/skills")
+    a = ap.parse_args()
+    root = Path(a.skills_dir) if a.skills_dir else Path(__file__).resolve().parent.parent / "skills"
     bad = 0
     for skill in sorted(p for p in root.iterdir() if (p / "SKILL.md").exists()):
         errs, warns, est = check(skill)
