@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+UTF8_RE = re.compile(r"reconfigure\(encoding=[\"']utf-8")
 LINK_RE = re.compile(r"\]\(([^)#\s]+)\)")
 BODY_MAX = 500          # Anthropic hard guidance
 BODY_TARGET = 150       # this kit's own budget: SKILL.md should stay lean
@@ -67,6 +68,8 @@ def check(skill: Path) -> tuple[list[str], list[str], str]:
             if nested:
                 warns.append(f"{link} links to {nested} — keep references one level deep")
     for py in sorted((skill / "scripts").glob("*.py")) if (skill / "scripts").exists() else []:
+        if not UTF8_RE.search(py.read_text(encoding="utf-8")):
+            errs.append(f"{py.name} lacks UTF-8 stdio reconfigure (see A1)")
         r = subprocess.run([sys.executable, str(py), "--help"], capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             errs.append(f"{py.name} --help failed: {r.stderr.strip()[:120]}")
@@ -74,7 +77,14 @@ def check(skill: Path) -> tuple[list[str], list[str], str]:
     return errs, warns, est
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "skills"
     bad = 0
     for skill in sorted(p for p in root.iterdir() if (p / "SKILL.md").exists()):

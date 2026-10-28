@@ -399,7 +399,14 @@ def cmd_sync(a, r, cfg, base):
 
 
 # ---------------------------------------------------------------- main
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(prog="notes", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("init")

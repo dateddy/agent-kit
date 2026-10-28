@@ -79,7 +79,14 @@ def prune(logdir: Path) -> None:
         p.unlink(missing_ok=True)
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tail", type=int, default=DEFAULT_TAIL)
     ap.add_argument("--name", help="log file label (default: first word of the command)")

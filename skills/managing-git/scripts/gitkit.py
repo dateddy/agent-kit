@@ -525,7 +525,14 @@ def cmd_stashes(a, cfg):
 
 
 # ---------------------------------------------------------------- main
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(prog="gitkit", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("snapshot"); s.add_argument("--max-files", type=int, default=15); s.add_argument("--log", type=int, default=5)

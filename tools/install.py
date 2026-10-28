@@ -48,7 +48,14 @@ def link_or_copy(target: Path, link: Path, force: bool) -> str:
         return f"copy {link} (symlink unavailable; re-run install after updating the kit)"
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("repo", nargs="?")
     ap.add_argument("--user", action="store_true")

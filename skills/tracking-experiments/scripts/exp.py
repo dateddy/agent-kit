@@ -296,7 +296,14 @@ def cmd_best(a, r, c):
     return OK
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(prog="exp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd_name", required=True)
 

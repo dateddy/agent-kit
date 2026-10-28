@@ -176,7 +176,14 @@ def tamper_check(root: Path) -> list[str]:
     return list(dict.fromkeys(notes))
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", help="comma list of gates: " + ",".join(GATES))
     ap.add_argument("--detect", action="store_true")
