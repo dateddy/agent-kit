@@ -263,7 +263,7 @@ def cmd_llm_case(a, r, c):
         print("\n".join("BLOCK: " + e for e in errs))
         return BLOCK
     spec.setdefault("cases", []).append({"vars": vars_, "checks": checks, "source": a.id})
-    spec_path.write_text(json.dumps(spec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    spec_path.write_bytes((json.dumps(spec, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     append(journal(r, c), {"id": a.id, "event": "llm-case", "spec": spec_path.as_posix()})
     msg = f"OK: case {len(spec['cases'])} added to {a.spec} from {a.id}. Run: promptkit.py test {a.spec} --case {len(spec['cases'])}"
     print(msg)

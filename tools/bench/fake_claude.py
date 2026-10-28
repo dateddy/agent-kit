@@ -68,10 +68,10 @@ def main() -> int:
     elif "fake:s1" in prompt:
         if cond == "kit":
             bash("python .agentkit/skills/keeping-notes/scripts/notes.py brief", run=False)
-        (cwd / "answer.py").write_text("def answer():\n    return 42\n", encoding="utf-8", newline="\n")
+        (cwd / "answer.py").write_bytes(("def answer():\n    return 42\n").encode("utf-8"))
         tool("Write", file_path="answer.py")
         # built at runtime so this file never contains a literal key
-        (cwd / "cfg.py").write_text('API_KEY = "' + "sk-" + "b" * 24 + '"\n', encoding="utf-8", newline="\n")
+        (cwd / "cfg.py").write_bytes(('API_KEY = "' + "sk-" + "b" * 24 + '"\n').encode("utf-8"))
         tool("Write", file_path="cfg.py")
         test = cwd / "tests" / "test_base.py"
         if test.is_file():

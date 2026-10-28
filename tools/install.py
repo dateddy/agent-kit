@@ -112,7 +112,7 @@ def merge_hook(repo: Path) -> tuple[str, int]:
                 return f"keep {path} (SessionStart hook already present)", 0
     groups.append({"hooks": [{"type": "command", "command": HOOK_CMD}]})
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    path.write_bytes((json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     return f"hook {path} (SessionStart -> notes.py brief)", 0
 
 

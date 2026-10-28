@@ -158,7 +158,7 @@ def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str
         shutil.copytree(seed, wd, dirs_exist_ok=True)
     if cond == "rules":
         shutil.copy(KIT / "templates" / "AGENTS.rules-only.md", wd / "AGENTS.md")
-        (wd / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8", newline="\n")
+        (wd / "CLAUDE.md").write_bytes(("@AGENTS.md\n").encode("utf-8"))
     elif cond == "kit":
         args = [sys.executable, KIT / "tools" / "install.py", wd, "--git-hooks"]
         if meta.get("with"):
@@ -243,7 +243,7 @@ def run_session(a, workdir: Path, fixture: Path, prompt: str, max_turns: int, lo
     except subprocess.TimeoutExpired as ex:
         raw, rc, err = (ex.stdout or b"").decode("utf-8", "replace"), 124, f"timeout after {a.session_timeout}s"
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(raw, encoding="utf-8", newline="\n")
+    log.write_bytes((raw).encode("utf-8"))
     s = parse_stream(raw)
     s["duration_s"] = time.time() - t0
     if rc != 0 and not s["error"]:

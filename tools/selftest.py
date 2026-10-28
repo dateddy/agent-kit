@@ -120,7 +120,7 @@ class T:
         for rel, text in files.items():
             f = root / rel
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(text, encoding="utf-8", newline="\n")
+            f.write_bytes((text).encode("utf-8"))
 
     @staticmethod
     def commit(d: Path, msg: str = "chore: snapshot") -> None:
@@ -567,7 +567,7 @@ def b3a(t: T):
     d = t.repo("a", files={".git-keep": ""})
     hook = d / ".git" / "hooks" / "pre-commit"
     hook.parent.mkdir(exist_ok=True)
-    hook.write_text(ORIG_HOOK, encoding="utf-8", newline="\n")
+    hook.write_bytes((ORIG_HOOK).encode("utf-8"))
     for i in (1, 2):
         code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
         check(code == 0, f"run {i}: exit {code}: {out[-300:]}")
@@ -581,7 +581,7 @@ def b3a(t: T):
     e = t.repo("e")
     git(e, "config", "core.hooksPath", ".githooks")
     (e / ".githooks").mkdir()
-    (e / ".githooks" / "pre-commit").write_text(ORIG_HOOK, encoding="utf-8", newline="\n")
+    (e / ".githooks" / "pre-commit").write_bytes((ORIG_HOOK).encode("utf-8"))
     code, out = kit("install", str(e), "--git-hooks", cwd=t.base)
     check(code == 0, f"hooksPath install exit {code}: {out[-300:]}")
     check(HOOK_MARK in (e / ".githooks" / "pre-commit").read_text(encoding="utf-8"), "block not in core.hooksPath dir")
@@ -623,7 +623,7 @@ def b3d(t: T):
     check(hook.read_bytes() == ORIG_HOOK.encode("utf-8"), f"pre-commit changed: {hook.read_bytes()!r}")
     check(not (d / ".git" / "hooks" / "commit-msg").exists(), "commit-msg created by the kit must be removed")
     py = d / ".git" / "hooks" / "commit-msg"
-    py.write_text("#!/usr/bin/env python3\nprint('x')\n", encoding="utf-8", newline="\n")
+    py.write_bytes(("#!/usr/bin/env python3\nprint('x')\n").encode("utf-8"))
     code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
     check(code == 2 and py.read_text(encoding="utf-8").count("agent-kit") == 0, f"non-sh hook: exit {code}: {out[-300:]}")
 
@@ -705,7 +705,7 @@ def bench_setup(t: T) -> tuple:
     sh_shim.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "{FAKE.as_posix()}" "$@"\n',
                        encoding="utf-8", newline="\n")
     sh_shim.chmod(0o755)
-    (bin_ / "claude.cmd").write_text(f'@"{sys.executable}" "{FAKE}" %*\r\n', encoding="utf-8", newline="")
+    (bin_ / "claude.cmd").write_bytes((f'@"{sys.executable}" "{FAKE}" %*\r\n').encode("utf-8"))
     env = {"PATH": str(bin_) + os.pathsep + os.environ.get("PATH", "")}
     found = shutil.which("claude", path=env["PATH"])
     check(found and Path(found).parent == bin_, f"claude must resolve to the fake, got {found}")
