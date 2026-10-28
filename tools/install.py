@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
 SKILLS = sorted(p for p in (KIT / "skills").iterdir() if (p / "SKILL.md").exists())
@@ -51,6 +52,25 @@ def link_or_copy(target: Path, link: Path, force: bool) -> str:
     except OSError:  # Windows without developer mode
         copy_skill(target, link)
         return f"copy {link} (symlink unavailable; re-run install after updating the kit)"
+
+
+def remove_path(p: Path) -> None:
+    """Remove a symlink, junction, file or directory without following links."""
+    if p.is_symlink() or p.is_file():
+        p.unlink()
+        return
+    try:
+        os.rmdir(p)  # also removes a Windows junction without touching its target
+    except OSError:
+        shutil.rmtree(p)
+
+
+def remove_legacy(repo: Path) -> None:
+    for name in LEGACY_SKILLS:
+        for p in (repo / ".claude" / "skills" / name, repo / ".agentkit" / "skills" / name):
+            if p.is_symlink() or p.exists():
+                remove_path(p)
+                print(f"remove {p} (merged into writing-plans)")
 
 
 def merge_hook(repo: Path) -> tuple[str, int]:
@@ -92,6 +112,12 @@ def main() -> int:
     if a.user:
         dest = Path.home() / ".claude" / "skills"
         dest.mkdir(parents=True, exist_ok=True)
+        for name in LEGACY_SKILLS:
+            old = dest / name
+            md = old / "SKILL.md"
+            if md.is_file() and f"name: {name}" in md.read_text(encoding="utf-8"):
+                remove_path(old)
+                print(f"remove {old} (merged into writing-plans)")
         for s in SKILLS:
             copy_skill(s, dest / s.name)
             print(f"copy {dest / s.name}")
@@ -106,6 +132,7 @@ def main() -> int:
 
     canon = repo / ".agentkit" / "skills"
     canon.mkdir(parents=True, exist_ok=True)
+    remove_legacy(repo)
     for s in SKILLS:
         copy_skill(s, canon / s.name)
         print(f"copy {canon / s.name}")
@@ -120,6 +147,9 @@ def main() -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, dst)
             print(f"create {dst}")
+        elif name == ".claude/commands/task.md" and "starting-tasks" in dst.read_text(encoding="utf-8"):
+            shutil.copy(src, dst)
+            print(f"update {dst} (now points to writing-plans)")
         elif name == "AGENTS.md" and "keeping-notes" not in dst.read_text(encoding="utf-8"):
             print(f"WARN {dst} exists — merge the rules from {src} into it by hand")
         elif name == "CLAUDE.md" and "@AGENTS.md" not in dst.read_text(encoding="utf-8"):

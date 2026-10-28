@@ -491,12 +491,30 @@ def b5b(t: T):
     check((bad / ".claude/settings.json").read_text(encoding="utf-8") == "{ not json\n", "invalid file was modified")
 
 
+@scenario("B1", "install removes legacy starting-tasks and rewrites the old /task command")
+def b1(t: T):
+    d = t.repo(files={
+        ".agentkit/skills/starting-tasks/SKILL.md": "---\nname: starting-tasks\n---\n",
+        ".claude/skills/starting-tasks/SKILL.md": "---\nname: starting-tasks\n---\n",
+        ".claude/commands/task.md": "Use the starting-tasks skill for this request:\n\n$ARGUMENTS\n",
+    })
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"install exit {code}: {out[-300:]}")
+    check(not (d / ".agentkit/skills/starting-tasks").exists() and not (d / ".claude/skills/starting-tasks").exists(),
+          f"legacy dirs remain: {out[-300:]}")
+    task = (d / ".claude/commands/task.md").read_text(encoding="utf-8")
+    check("writing-plans" in task and "starting-tasks" not in task, f"task.md: {task[:200]}")
+    check((d / ".agentkit/skills/writing-plans/SKILL.md").is_file(), "writing-plans missing")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and "remove" not in out, f"second install should be quiet: {out[-200:]}")
+
+
 # ================================================================ V validate the real kit
-@scenario("V", "validate_skills on the real kit: exit 0, all 10 skills ok")
+@scenario("V", "validate_skills on the real kit: exit 0, all 9 skills ok")
 def v(t: T):
     code, out = kit("validate", cwd=t.base)
     oks = [l for l in out.splitlines() if l.startswith("ok ")]
-    check(code == 0 and len(oks) == 10 and "FAIL" not in out and "ERROR" not in out,
+    check(code == 0 and len(oks) == 9 and "FAIL" not in out and "ERROR" not in out,
           f"exit {code}, {len(oks)} ok lines: {out[:400]}")
 
 

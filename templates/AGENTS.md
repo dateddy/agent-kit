@@ -8,13 +8,13 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 
 ## Mode: question or task
 - Message starts with `?` → **question mode**: read-only. Read, search and run read-only commands; do not edit files, commit, or touch task notes. Answer concisely, then stop.
-- Starts with `/task` or `task:` → follow **starting-tasks**.
+- Starts with `/task` or `task:` → follow **writing-plans** (Frame first).
 - No prefix and the message asks for a change (add, fix, implement, refactor, remove, rename, commit…) → **task mode**.
 - No prefix and unclear → treat as a question; end with one line offering to do it.
 
 ## Task lifecycle
 1. Start of session: `nt brief`. Trust it over re-exploring; read only what it points to.
-2. Non-trivial task → plan first (writing-plans). New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it. After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
+2. Non-trivial task → plan first (writing-plans). ≤2 files and no design decision → lite path: no plan file. New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it. After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
 3. Per step: `pl step N` → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit (managing-git). Before editing a module: `rm --zone <file>`. Inner loop: `vf --affected`; the full `vf` is still required before commit.
 4. Done only when `vf` exits 0 after the last edit (never pipe it; the VERDICT line is authoritative). Never weaken tests to pass.
 5. Decision settled by the user → `nt decide --topic … --text … --why …`.
