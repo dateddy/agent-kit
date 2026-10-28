@@ -4,6 +4,8 @@
   python tools/install.py <repo>          project install (recommended)
   python tools/install.py --user          skills only, into ~/.claude/skills (all projects)
   python tools/install.py <repo> --force  overwrite existing .claude/skills/<name> entries
+  python tools/install.py <repo> --hooks  also add a Claude Code SessionStart hook that runs `notes.py brief`
+                                          (merged into <repo>/.claude/settings.json; nothing existing is overwritten)
 
 Project install does:
   <repo>/.agentkit/skills/<skill>   canonical copy, agent-neutral (referenced by AGENTS.md)
@@ -14,12 +16,15 @@ Project install does:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
 SKILLS = sorted(p for p in (KIT / "skills").iterdir() if (p / "SKILL.md").exists())
 
@@ -48,6 +53,27 @@ def link_or_copy(target: Path, link: Path, force: bool) -> str:
         return f"copy {link} (symlink unavailable; re-run install after updating the kit)"
 
 
+def merge_hook(repo: Path) -> tuple[str, int]:
+    """Add the SessionStart hook to <repo>/.claude/settings.json without touching anything else."""
+    path = repo / ".claude" / "settings.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError as e:
+        return f"WARN {path} is not valid JSON ({e}) — left untouched; add the hook by hand: {HOOK_CMD}", 2
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else None
+    if not isinstance(hooks, dict) or not isinstance(hooks.get("SessionStart", []), list):
+        return f"WARN {path} has an unexpected layout — left untouched; add the hook by hand: {HOOK_CMD}", 2
+    groups = data.setdefault("hooks", {}).setdefault("SessionStart", [])
+    for g in groups:
+        for h in g.get("hooks", []) if isinstance(g, dict) else []:
+            if isinstance(h, dict) and h.get("command") == HOOK_CMD:
+                return f"keep {path} (SessionStart hook already present)", 0
+    groups.append({"hooks": [{"type": "command", "command": HOOK_CMD}]})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    return f"hook {path} (SessionStart -> notes.py brief)", 0
+
+
 def utf8_stdio() -> None:
     for s in (sys.stdout, sys.stderr):
         if hasattr(s, "reconfigure"):
@@ -60,6 +86,7 @@ def main() -> int:
     ap.add_argument("repo", nargs="?")
     ap.add_argument("--user", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--hooks", action="store_true", help="add a Claude Code SessionStart hook (notes.py brief)")
     a = ap.parse_args()
 
     if a.user:
@@ -102,10 +129,14 @@ def main() -> int:
             print(f"keep {dst}")
 
     r = subprocess.run([sys.executable, str(canon / "keeping-notes" / "scripts" / "notes.py"), "init"],
-                       cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", env=CHILD_ENV)
     print(r.stdout.strip() or r.stderr.strip())
+    code = 0
+    if a.hooks:
+        msg, code = merge_hook(repo)
+        print(msg)
     print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, notes/decisions.md.")
-    return 0
+    return code
 
 
 if __name__ == "__main__":

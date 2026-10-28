@@ -441,6 +441,38 @@ def b4d(t: T):
     check(code == 0, f"promptkit check exit {code}: {out[:300]}")
 
 
+# ================================================================ B5 SessionStart hook
+HOOK = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
+
+
+@scenario("B5a", "install --hooks twice: hook present once, existing settings preserved")
+def b5a(t: T):
+    existing = {"permissions": {"allow": ["Bash(ls)"]},
+                "hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "echo hi"}]}],
+                          "Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}]}}
+    d = t.repo(files={".claude/settings.json": json.dumps(existing, indent=2) + "\n"})
+    for i in (1, 2):
+        code, out = kit("install", str(d), "--hooks", cwd=t.base)
+        check(code == 0, f"run {i}: exit {code}: {out[-300:]}")
+    got = json.loads((d / ".claude/settings.json").read_text(encoding="utf-8"))
+    cmds = [h["command"] for g in got["hooks"]["SessionStart"] for h in g["hooks"]]
+    check(cmds.count(HOOK) == 1 and "echo hi" in cmds, f"SessionStart commands: {cmds}")
+    check(got["permissions"] == existing["permissions"] and got["hooks"]["Stop"] == existing["hooks"]["Stop"],
+          "existing keys changed")
+    check(got["hooks"]["SessionStart"][0] == existing["hooks"]["SessionStart"][0], "existing hook entry changed")
+
+
+@scenario("B5b", "install without --hooks writes no settings.json; invalid settings.json is left untouched (exit 2)")
+def b5b(t: T):
+    d = t.repo(name="plain")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and not (d / ".claude/settings.json").exists(), f"exit {code}; settings.json must not exist")
+    bad = t.repo(name="bad", files={".claude/settings.json": "{ not json\n"})
+    code, out = kit("install", str(bad), "--hooks", cwd=t.base)
+    check(code == 2 and "WARN" in out, f"exit {code}: {out[-300:]}")
+    check((bad / ".claude/settings.json").read_text(encoding="utf-8") == "{ not json\n", "invalid file was modified")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252
