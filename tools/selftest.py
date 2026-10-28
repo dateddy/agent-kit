@@ -206,32 +206,6 @@ def a3c(t: T):
     check(code == 2 and "NOTHING VERIFIED (exit 2)" in out, f"exit {code}: {out[:300]}")
 
 
-def staged(t: T, files: dict, name: str) -> tuple[int, str]:
-    d = t.repo(name)
-    t.write(d, files)
-    git(d, "add", "-A")
-    return kit("gk", "suggest", "--staged", cwd=d)
-
-
-@scenario("A4a", "gitkit suggest: source + its test is one concern")
-def a4a(t: T):
-    code, out = staged(t, {"faq/data.py": "x = 1\n", "tests/test_data.py": UT_TEST}, "a")
-    check(code == 0, f"exit {code}: {out[:300]}")
-
-
-@scenario("A4b", "gitkit suggest: source + test + README + requirements warns")
-def a4b(t: T):
-    code, out = staged(t, {"faq/data.py": "x = 1\n", "tests/test_data.py": UT_TEST,
-                           "README.md": "# demo\nmore\n", "requirements.txt": "requests\n"}, "b")
-    check(code == 2 and "WARN" in out, f"exit {code}: {out[:300]}")
-
-
-@scenario("A4c", "gitkit suggest: notes/decisions.md is ignored for categorising")
-def a4c(t: T):
-    code, out = staged(t, {"notes/decisions.md": "# Decisions\n", "faq/data.py": "x = 1\n"}, "c")
-    check(code == 0, f"exit {code}: {out[:300]}")
-
-
 FAKE_KEY = "sk-" + "a" * 24  # built at runtime so this file never trips the kit's own scan
 
 
@@ -248,6 +222,16 @@ def a4(t: T):
     check(code == 1 and "src/cfg.py" in out and "notes/" not in out, f"exit {code}: {out[:300]}")
     code, out = kit("gk", "diff", "--staged", cwd=d)
     check("kit-managed" in out and "src/cfg.py" in out, f"diff should list notes/ as kit-managed: {out[:300]}")
+
+
+@scenario("B2", "gitkit suggest, snapshot and stashes no longer exist")
+def b2(t: T):
+    d = t.repo("b2")
+    for sub in ("suggest", "snapshot", "stashes"):
+        code, out = kit("gk", sub, cwd=d)
+        check(code == 2 and "invalid choice" in out, f"{sub}: exit {code}: {out[:200]}")
+    code, out = kit("gk", "--help", cwd=d)
+    check(all(w in out for w in ("diff", "scan", "lint-msg", "branch-name", "preflight")), f"help: {out[:300]}")
 
 
 # ================================================================ B1 zone

@@ -5,14 +5,11 @@ Every subcommand prints compact text and uses exit codes as the decision signal:
   0 = OK, 1 = BLOCK (do not proceed), 2 = WARN (proceed only after telling the user)
 
 Subcommands:
-  snapshot              compact repo state (branch, upstream, changes, stash, recent log)
-  diff [--staged]       size-capped diff; skips lockfiles/generated files
-  suggest [--staged]    rule-based commit type/scope candidates from changed paths
+  diff [--staged]       size-capped diff; skips lockfiles, generated and kit-managed files
   lint-msg FILE|-m MSG  validate a Conventional Commit message against config
   scan [--staged]       block secrets, .env files and oversized files before commit
   branch-name TYPE DESC [--ticket T]   build a branch name;  --check NAME  validates one
   preflight OP [ARG]    OP in: commit, switch, merge, rebase, push, stash-pop, pull
-  stashes               compact stash list
 """
 from __future__ import annotations
 
@@ -131,54 +128,6 @@ def ignored(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, p) or fnmatch.fnmatch(os.path.basename(path), p) for p in patterns)
 
 
-def cap(lines: list[str], n: int, label: str = "items") -> list[str]:
-    return lines if len(lines) <= n else lines[:n] + [f"  … +{len(lines) - n} more {label}"]
-
-
-# ---------------------------------------------------------------- snapshot
-def cmd_snapshot(a, cfg):
-    gd = git_dir()
-    br = current_branch()
-    head = out("rev-parse", "--short", "HEAD") or "(no commits)"
-    up = out("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    lines = [f"branch: {br} @ {head}" + ("  [PROTECTED]" if is_protected(br, cfg) else "")]
-    if up:
-        ab = out("rev-list", "--left-right", "--count", f"{up}...HEAD").split()
-        if len(ab) == 2:
-            lines.append(f"upstream: {up}  behind {ab[0]} / ahead {ab[1]}")
-    else:
-        lines.append("upstream: none")
-    op = in_progress(gd)
-    if op:
-        lines.append(f"IN PROGRESS: {op}  (finish or abort before anything else)")
-
-    ent = status_entries()
-    staged = [f"  {xy[0]} {p}" for xy, p in ent if xy[0] not in " ?"]
-    unstaged = [f"  {xy[1]} {p}" for xy, p in ent if xy[1] not in " ?"]
-    untracked = [f"  ? {p}" for xy, p in ent if xy == "??"]
-    conflicts = [f"  U {p}" for xy, p in ent if "U" in xy or xy in ("AA", "DD")]
-    n = a.max_files
-    for title, items in (("conflicts", conflicts), ("staged", staged),
-                         ("unstaged", unstaged), ("untracked", untracked)):
-        if items:
-            lines.append(f"{title} ({len(items)}):")
-            lines += cap(items, n, "files")
-    if not ent:
-        lines.append("working tree: clean")
-    st = out("diff", "--cached", "--shortstat") if staged else out("diff", "--shortstat")
-    if st:
-        lines.append(("staged " if staged else "unstaged ") + "stat: " + st)
-    sc = len([s for s in out("stash", "list").splitlines() if s])
-    if sc:
-        lines.append(f"stashes: {sc}")
-    log = out("log", "--oneline", "-n", str(a.log), "--no-decorate")
-    if log:
-        lines.append("recent:")
-        lines += ["  " + l for l in log.splitlines()]
-    print("\n".join(lines))
-    return OK
-
-
 # ---------------------------------------------------------------- diff
 def cmd_diff(a, cfg):
     paths = changed_paths(a.staged)
@@ -215,65 +164,13 @@ def cmd_diff(a, cfg):
     return OK
 
 
-# ---------------------------------------------------------------- suggest
-TYPE_RULES = [  # (type, path predicate) — first full match over ALL files wins
-    ("build", lambda p: os.path.basename(p) in (
-        "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "package.json", "Dockerfile",
-        "docker-compose.yml", "Makefile", "go.mod", "Cargo.toml", "environment.yml") or ignored(p, ["*.lock", "*-lock.*"])),
-    ("docs", lambda p: p.endswith((".md", ".rst", ".txt")) or p.startswith(("docs/", "doc/"))),
-    ("test", lambda p: re.search(r"(^|/)(tests?|__tests__|spec)/|(_test|\.test|\.spec|test_)[^/]*$", p) is not None),
-    ("ci", lambda p: p.startswith((".github/", ".gitlab-ci", ".circleci/")) or p in ("Jenkinsfile", ".gitlab-ci.yml")),
-    ("style", lambda p: os.path.basename(p) in (".editorconfig", ".prettierrc", "ruff.toml", ".flake8")),
-    ("chore", lambda p: os.path.basename(p) in (".gitignore", ".gitattributes", ".agentkit.json", "LICENSE")),
-]
-
-
+# ---------------------------------------------------------------- kit-managed files
 KIT_MANAGED = ("notes/", ".agentkit/", "prompts/runs/")
 
 
 def kit_managed(p: str) -> bool:
-    """Files the kit writes itself; they never decide a commit's category."""
+    """Files the kit writes itself; scan and diff ignore them."""
     return p.startswith(KIT_MANAGED) or p in (".agentkit.json", "experiments/runs.jsonl")
-
-
-def cmd_suggest(a, cfg):
-    paths = changed_paths(a.staged)
-    if not paths:
-        print("no changes" + (" staged" if a.staged else ""))
-        return BLOCK
-    managed = [p for p in paths if kit_managed(p)]
-    cand = [p for p in paths if not kit_managed(p)] or paths
-    decided = next((t for t, pred in TYPE_RULES if all(pred(p) for p in cand)), None)
-    # scope = most common first meaningful directory
-    tops = {}
-    for p in paths:
-        parts = [x for x in p.split("/")[:-1] if x not in ("src", "lib", "app", "packages")]
-        if parts:
-            tops[parts[0]] = tops.get(parts[0], 0) + 1
-    scope = max(tops, key=tops.get) if tops and max(tops.values()) / len(paths) >= 0.6 else None
-    if cfg["scopes"] and scope not in cfg["scopes"]:
-        scope = None
-    added = len([1 for l in out("diff", "--name-status", *(["--cached"] if a.staged else [])).splitlines() if l.startswith("A")])
-    print(f"files: {len(paths)} (new: {added})")
-    if decided:
-        print(f"type: {decided}   (rule-decided: all files match)")
-    else:
-        print("type: UNDECIDED -> choose from feat|fix|refactor|perf by reading the diff")
-        print("  hint: new public behavior=feat, wrong behavior corrected=fix, same behavior restructured=refactor")
-    print(f"scope: {scope or '(none — omit or pick from config scopes)'}")
-    if managed and cand is not paths:
-        print(f"ignored kit-managed: {len(managed)}")
-    # first matching category per file; no match = source. Tests ride along with their source.
-    cats = {next((t for t, pred in TYPE_RULES if pred(p)), "source") for p in cand}
-    has_src = "source" in cats
-    others = cats - {"source", "test"} if has_src else cats
-    if has_src and len(others) >= 2:
-        print(f"WARN: mixed categories {sorted(others)} + source files — consider splitting the commit")
-        return WARN
-    if not has_src and len(others) >= 2 and not decided:
-        print(f"WARN: mixed categories {sorted(others)} (no source files) — consider splitting the commit")
-        return WARN
-    return OK
 
 
 # ---------------------------------------------------------------- lint-msg
@@ -533,18 +430,6 @@ def cmd_preflight(a, cfg):
     return OK
 
 
-# ---------------------------------------------------------------- stashes
-def cmd_stashes(a, cfg):
-    s = out("stash", "list", "--format=%gd|%cr|%gs")
-    if not s:
-        print("no stashes")
-        return OK
-    for l in s.splitlines():
-        ref, age, msg = (l.split("|", 2) + ["", ""])[:3]
-        print(f"{ref:12} {age:16} {msg}")
-    return OK
-
-
 # ---------------------------------------------------------------- main
 def utf8_stdio() -> None:
     for s in (sys.stdout, sys.stderr):
@@ -556,20 +441,17 @@ def main() -> int:
     utf8_stdio()
     ap = argparse.ArgumentParser(prog="gitkit", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
-    s = sp.add_parser("snapshot"); s.add_argument("--max-files", type=int, default=15); s.add_argument("--log", type=int, default=5)
     s = sp.add_parser("diff"); s.add_argument("--staged", action="store_true"); s.add_argument("--max-lines", type=int, default=DIFF_MAX_LINES); s.add_argument("paths", nargs="*")
-    s = sp.add_parser("suggest"); s.add_argument("--staged", action="store_true")
     s = sp.add_parser("lint-msg"); s.add_argument("file", nargs="?"); s.add_argument("-m", "--message")
     s = sp.add_parser("scan"); s.add_argument("--staged", action="store_true")
     s = sp.add_parser("branch-name"); s.add_argument("type", nargs="?"); s.add_argument("desc", nargs="*"); s.add_argument("--ticket"); s.add_argument("--check")
     s = sp.add_parser("preflight"); s.add_argument("op", choices=["commit", "switch", "merge", "rebase", "push", "pull", "stash-pop"]); s.add_argument("arg", nargs="?")
-    sp.add_parser("stashes")
     a = ap.parse_args()
     if a.cmd == "lint-msg" and a.file is None and a.message is None:
         ap.error("lint-msg needs FILE or -m MSG")
     cfg = load_cfg(repo_root())
-    fn = {"snapshot": cmd_snapshot, "diff": cmd_diff, "suggest": cmd_suggest, "lint-msg": cmd_lint_msg,
-          "scan": cmd_scan, "branch-name": cmd_branch_name, "preflight": cmd_preflight, "stashes": cmd_stashes}[a.cmd]
+    fn = {"diff": cmd_diff, "lint-msg": cmd_lint_msg, "scan": cmd_scan,
+          "branch-name": cmd_branch_name, "preflight": cmd_preflight}[a.cmd]
     return fn(a, cfg)
 
 

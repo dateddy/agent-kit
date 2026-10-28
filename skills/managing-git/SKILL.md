@@ -17,24 +17,26 @@ Path: `python <this-skill>/scripts/gitkit.py <cmd>` (shown below as `gk`). Confi
 | message format, allowed types/scopes | how to group files into commits | anything in "Destructive ops" |
 | secret block, preflight safety checks | commit subject/body wording | splitting into >1 commit |
 | when to ask (protected branch = WARN) | | committing directly on a protected branch |
-| type when all files match a rule | feat vs fix vs refactor when UNDECIDED | merge vs rebase strategy |
+| allowed types, subject rules | which type (feat, fix, refactor, …) | merge vs rebase strategy |
 | conflict prediction, branch naming | how to resolve a conflict hunk | false-positive secret override |
 
 ## Commit
 
 ```
-- [ ] 1. gk snapshot
+- [ ] 1. git status -sb && git log --oneline -5
 - [ ] 2. Group changes by concern. >1 group → propose groups to user, one commit each
-      (code + its tests + its docstring/README line = one concern = one commit;
+      (code + its tests + its doc line = one commit;
        kit-managed files — notes/, .agentkit/, .agentkit.json — never count as a concern)
 - [ ] 3. git add <explicit paths>      (never `git add -A`/`.` unless user said "all")
 - [ ] 4. gk preflight commit           (WARN on protected branch → ask: commit here or new branch?)
 - [ ] 5. gk scan --staged
-- [ ] 6. gk suggest --staged           (rule-decided type wins)
-- [ ] 7. gk diff --staged              (capped; read only what you need)
-- [ ] 8. write message to .git/AGENT_MSG → gk lint-msg .git/AGENT_MSG → fix until 0
-- [ ] 9. git commit -F .git/AGENT_MSG && gk snapshot --log 1
+- [ ] 6. gk diff --staged              (capped; read only what you need)
+- [ ] 7. pick the type with reference/commit-examples.md; write the message to .git/AGENT_MSG
+         → gk lint-msg .git/AGENT_MSG → fix until 0
+- [ ] 8. git commit -F .git/AGENT_MSG && git log --oneline -1
 ```
+
+**Rule: code + its tests + its doc line = one commit.** Never split a feature from its own tests, and never ask the user about it.
 
 Message rules (lint enforces the rest): subject says *what* in imperative; body (optional, for non-trivial changes) says *why* and side effects, not a file list. Examples: [reference/commit-examples.md](reference/commit-examples.md).
 
@@ -51,7 +53,7 @@ One task = one branch (keeping-notes keys task notes by branch name).
 ## Stash
 
 - Save: `git stash push -m "<why>" [-- paths]` (always with message; add `-u` only for untracked files the user wants kept).
-- List: `gk stashes`. Restore: `gk preflight stash-pop` → `git stash apply stash@{n}` → verify → `git stash drop stash@{n}`.
+- List: `git stash list`. Restore: `gk preflight stash-pop` → `git stash apply stash@{n}` → verify → `git stash drop stash@{n}`.
 
 ## Merge / rebase / pull / push
 
