@@ -18,8 +18,9 @@ Run `python <this-skill>/scripts/gitkit.py <cmd>` (below: `gk`). Config: `.agent
 4. gk preflight commit          (protected-branch WARN → ask: commit here or new branch?)
 5. gk scan --staged
 6. gk diff --staged             (capped; read only what you need)
-7. write the message to .git/AGENT_MSG (type: reference/commit-examples.md) → gk lint-msg .git/AGENT_MSG until 0
-8. git commit -F .git/AGENT_MSG && git log --oneline -1
+7. m=$(git rev-parse --git-path AGENT_MSG)   (never a hard-coded .git/: in a worktree .git is a file)
+   write the message to "$m" (type: reference/commit-examples.md) → gk lint-msg "$m" until 0
+8. git commit -F "$m" && git log --oneline -1
 ```
 
 - Code + its tests + its doc line = one commit. Never split them and never ask about it.

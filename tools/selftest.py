@@ -671,6 +671,32 @@ def b3p(t: T):
     check(out.count("python not found") == 2 and "SKIPPED" in out, f"warning missing: {out[-300:]}")
 
 
+@scenario("WT1", "commit flow in a `git worktree`: message at `git rev-parse --git-path AGENT_MSG`, lint-msg, commit -F")
+def wt1(t: T):
+    skill = (SK / "managing-git/SKILL.md").read_text(encoding="utf-8")
+    check("git rev-parse --git-path AGENT_MSG" in skill and ".git/AGENT_MSG" not in skill, "SKILL.md still hard-codes .git/")
+    d = hooked_repo(t, "main")
+    t.commit(d, "chore: install kit")
+    wt = t.base / "wt"
+    code, out = run(["git", "worktree", "add", "-q", "-b", "feat/a", wt], d)
+    check(code == 0 and (wt / ".git").is_file(), f"worktree add: exit {code}: {out[-200:]}")
+    t.write(wt, {"a.py": "print('a')\n"})
+    git(wt, "add", "a.py")
+    msg = wt / git(wt, "rev-parse", "--git-path", "AGENT_MSG").strip()  # relative to wt, or absolute
+    check(msg.parent.is_dir() and msg.parent != wt, f"--git-path gave {msg}")
+    t.write(msg.parent, {msg.name: "added a file\n"})
+    code, out = kit("gk", "lint-msg", str(msg), cwd=wt)
+    check(code == 1, f"a bad message must BLOCK: exit {code}: {out[:200]}")
+    t.write(msg.parent, {msg.name: "feat: add a.py\n\nA tiny module so the worktree has a change.\n"})
+    code, out = kit("gk", "lint-msg", str(msg), cwd=wt)
+    check(code == 0, f"lint-msg: exit {code}: {out[:200]}")
+    code, out = run(["git", "commit", "-q", "-F", msg], wt)
+    check(code == 0, f"commit -F (hooks run): exit {code}: {out[-300:]}")
+    check(git(wt, "log", "-1", "--format=%s").strip() == "feat: add a.py", "wrong commit subject")
+    check(git(d, "log", "-1", "--format=%s", "feat/a").strip() == "feat: add a.py", "commit not on feat/a")
+    check(not (d / ".git" / "AGENT_MSG").exists(), "the main checkout's AGENT_MSG must stay untouched")
+
+
 @scenario("B3a", "--git-hooks keeps an existing hook, adds the block once (also under core.hooksPath)")
 def b3a(t: T):
     d = t.repo("a", files={".git-keep": ""})
