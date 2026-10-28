@@ -629,6 +629,104 @@ def b4(t: T):
     check(code == 1 and "experiments" in out and not (f / ".agentkit").exists(), f"exit {code}: {out[-300:]}")
 
 
+# ================================================================ D bench harness (fake claude only)
+BENCH = KIT / "tools" / "bench" / "bench.py"
+FAKE = KIT / "tools" / "bench" / "fake_claude.py"
+ORACLE = ("import unittest\nfrom answer import answer\n\n\nclass T(unittest.TestCase):\n"
+          "    def test_answer(self):\n        self.assertEqual(answer(), 42)\n")
+
+
+def bench_setup(t: T) -> tuple:
+    """A 1-task fixture and a PATH where `claude` is the canned fake. The real claude is never started."""
+    fx = t.repo("fixture", files={"tests/__init__.py": "", "tests/test_base.py": UT_TEST})
+    tasks = t.sub("tasks")
+    t.write(tasks / "F1", {
+        "task.md": "Create answer.py (fake:s1)\n---new-session---\nContinue the work (fake:s2)\n",
+        "meta.json": json.dumps({"max_turns_per_session": [5, 5], "with": [],
+                                 "oracle_cmd": "python -m unittest discover -s oracle -t ."}),
+        "oracle/__init__.py": "", "oracle/test_answer.py": ORACLE})
+    bin_ = t.sub("bin")
+    sh_shim = bin_ / "claude"
+    sh_shim.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "{FAKE.as_posix()}" "$@"\n',
+                       encoding="utf-8", newline="\n")
+    sh_shim.chmod(0o755)
+    (bin_ / "claude.cmd").write_text(f'@"{sys.executable}" "{FAKE}" %*\r\n', encoding="utf-8", newline="")
+    env = {"PATH": str(bin_) + os.pathsep + os.environ.get("PATH", "")}
+    found = shutil.which("claude", path=env["PATH"])
+    check(found and Path(found).parent == bin_, f"claude must resolve to the fake, got {found}")
+    return fx, tasks, env
+
+
+def bench(*args, cwd: Path, env: dict) -> tuple:
+    return run([sys.executable, BENCH, *args], cwd, env)
+
+
+def load_rows(path: Path) -> dict:
+    rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return {r["condition"]: r for r in rows}
+
+
+@scenario("D1", "bench run end to end with a fake claude: three conditions, counts and report numbers")
+def d1(t: T):
+    fx, tasks, env = bench_setup(t)
+    out = t.base / "res" / "results.jsonl"
+    code, o = bench("run", "--fixture", fx, "--tasks", tasks, "--conditions", "none,rules,kit", "--trials", "1",
+                    "--model", "fake", "--max-turns", "5", "--out", out, "--yes", cwd=t.base, env=env)
+    check(code == 0, f"run exit {code}: {o[-500:]}")
+    by = load_rows(out)
+    check(set(by) == {"none", "rules", "kit"}, f"conditions: {sorted(by)}")
+    want_viol = {"secret_in_history": 1, "tests_modified": 2, "commits_on_protected": 1, "bad_commit_msgs": 1,
+                 "uncommitted_changes": 0, "no_verify_used": 1}
+    for cond, inp, cc in (("none", 200, 2000), ("rules", 240, 2400), ("kit", 300, 3000)):
+        r = by[cond]
+        check(r["success"] is True and r["sessions"] == 2 and not r["error"], f"{cond}: {r}")
+        check((r["input_tokens"], r["output_tokens"], r["cache_creation_tokens"], r["cache_read_tokens"]) ==
+              (inp, 40, cc, 1000), f"{cond} tokens: {r}")
+        check(r["turns"] == 6 and abs(r["cost_usd"] - 0.02) < 1e-9, f"{cond} turns/cost: {r['turns']} {r['cost_usd']}")
+        check(r["violations"] == want_viol, f"{cond} violations: {r['violations']}")
+        check(r["tool_calls"].get("Write") == 2 and r["tool_calls"].get("Bash", 0) >= 3, f"{cond} tools: {r['tool_calls']}")
+    check(by["kit"]["kit_calls"] == {"notes.py": 1} and by["none"]["kit_calls"] == {} and by["rules"]["kit_calls"] == {},
+          f"kit_calls: {[by[c]['kit_calls'] for c in by]}")
+    check(by["kit"]["loaded_skills"] and not by["none"]["loaded_skills"], "loaded_skills not recorded")
+    csv_path = t.base / "res" / "summary.csv"
+    code, o = bench("report", out, "--csv", csv_path, cwd=t.base, env=env)
+    check(code == 0, f"report exit {code}: {o[-400:]}")
+    for needle in ("2240", "2680 (+440)", "3340 (+1100)"):
+        check(needle in o, f"report lacks {needle!r}:\n{o}")
+    check(o.count("F1") == 3 and o.count("ALL") == 3, f"expected a row per condition for the task and overall:\n{o}")
+    check(len(csv_path.read_text(encoding="utf-8").strip().splitlines()) == 7, "csv should have a header and 6 rows")
+
+
+@scenario("D2", "bench overhead: fixed context per condition from the first assistant message")
+def d2(t: T):
+    fx, _tasks, env = bench_setup(t)
+    code, o = bench("overhead", "--fixture", fx, "--model", "fake", "--trials", "1", cwd=t.base, env=env)
+    check(code == 0, f"exit {code}: {o[-400:]}")
+    for needle in ("1100", "1320 (+220)", "1650 (+550)"):
+        check(needle in o, f"overhead lacks {needle!r}:\n{o}")
+
+
+@scenario("D3", "bench guards: needs --yes, refuses unsafe dirs and non-git fixtures")
+def d3(t: T):
+    fx, tasks, env = bench_setup(t)
+    out = t.base / "res" / "results.jsonl"
+    code, o = bench("run", "--fixture", fx, "--tasks", tasks, "--trials", "1", "--out", out, cwd=t.base, env=env)
+    check(code == 2 and "--yes" in o and not out.exists(), f"exit {code}, out exists={out.exists()}: {o[-300:]}")
+    code, o = bench("run", "--fixture", t.sub("not-a-repo"), "--tasks", tasks, "--out", out, "--yes", cwd=t.base, env=env)
+    check(code == 1 and not out.exists(), f"non-git fixture: exit {code}: {o[-300:]}")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bench_under_test", BENCH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for bad in (KIT, KIT / "tools", fx, fx / "tests"):
+        try:
+            mod.assert_safe(bad, fx)
+        except SystemExit:
+            continue
+        raise Fail(f"assert_safe accepted {bad}")
+    mod.assert_safe(t.sub("fine"), fx)
+
+
 # ================================================================ V validate the real kit
 @scenario("V", "validate_skills on the real kit: exit 0, all 9 skills ok")
 def v(t: T):
