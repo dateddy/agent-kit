@@ -178,9 +178,18 @@ HEADER_RE = re.compile(r"^(?P<type>[a-z]+)(\((?P<scope>[a-z0-9._/-]+)\))?(?P<ban
 PAST_TENSE = re.compile(r"^(added|fixed|updated|removed|changed|created|refactored|implemented|adds|fixes|updates|removes)\b", re.I)
 
 
+GIT_GENERATED = ("Merge ", "Revert \"", "fixup! ", "squash! ", "amend! ")
+SCISSORS_RE = re.compile(r"^# -+ >8 -+$")
+
+
 def cmd_lint_msg(a, cfg):
     msg = a.message if a.message is not None else Path(a.file).read_text(encoding="utf-8")
-    lines = [l for l in msg.splitlines() if not l.startswith("#")]
+    lines = []
+    for l in msg.splitlines():
+        if SCISSORS_RE.match(l):  # `git commit -v` appends the diff after this line
+            break
+        if not l.startswith("#"):
+            lines.append(l)
     while lines and not lines[-1].strip():
         lines.pop()
     errs, warns = [], []
@@ -189,8 +198,8 @@ def cmd_lint_msg(a, cfg):
         return BLOCK
     h = lines[0]
     m = HEADER_RE.match(h)
-    if h.startswith(("Merge ", "Revert \"")):
-        print("OK: git-generated merge/revert header")
+    if h.startswith(GIT_GENERATED):
+        print("OK: git-generated merge/revert/fixup/squash header")
         return OK
     if not m:
         errs.append("header must be `type(scope)?: subject` (lowercase type, colon, one space)")

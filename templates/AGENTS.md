@@ -23,6 +23,7 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 
 ## Scripts decide, you write
 - Exit codes: 0 OK · 2 WARN → show the user and wait for yes · 1 BLOCK → fix and re-run. Never bypass a BLOCK.
+- Never use `--no-verify` (or any other way around a git hook). A hook BLOCK is fixed, not bypassed.
 - Destructive or irreversible commands (reset --hard, force push, deleting branches/files, dropping stashes): quote the exact command and wait for an explicit yes.
 
 ## Token discipline

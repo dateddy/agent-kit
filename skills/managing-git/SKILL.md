@@ -40,6 +40,8 @@ Path: `python <this-skill>/scripts/gitkit.py <cmd>` (shown below as `gk`). Confi
 
 Message rules (lint enforces the rest): subject says *what* in imperative; body (optional, for non-trivial changes) says *why* and side effects, not a file list. Examples: [reference/commit-examples.md](reference/commit-examples.md).
 
+**Hooks:** if the repo has the agent-kit git hooks (`install.py --git-hooks`), `git commit` itself runs `scan --staged` and `lint-msg`. Never pass `--no-verify`; a hook BLOCK is fixed, not bypassed.
+
 Amend only the last **unpushed** commit (`git commit --amend`), and only if user asked.
 
 ## Branch

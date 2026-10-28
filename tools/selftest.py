@@ -493,6 +493,90 @@ def b1(t: T):
     check(code == 0 and "remove" not in out, f"second install should be quiet: {out[-200:]}")
 
 
+# ================================================================ B3 git hooks
+HOOK_MARK = "# >>> agent-kit >>>"
+ORIG_HOOK = "#!/bin/sh\necho original >> hook.log\n"
+
+
+def hooked_repo(t: T, name: str = "h") -> Path:
+    d = t.repo(name)
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    check(code == 0, f"install --git-hooks exit {code}: {out[-300:]}")
+    return d
+
+
+def commit_try(d: Path, msg: str, files: dict, t: T) -> tuple[int, str]:
+    t.write(d, files)
+    git(d, "add", *files)
+    return run(["git", "commit", "-q", "-m", msg], d)
+
+
+@scenario("B3a", "--git-hooks keeps an existing hook, adds the block once (also under core.hooksPath)")
+def b3a(t: T):
+    d = t.repo("a", files={".git-keep": ""})
+    hook = d / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(ORIG_HOOK, encoding="utf-8", newline="\n")
+    for i in (1, 2):
+        code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+        check(code == 0, f"run {i}: exit {code}: {out[-300:]}")
+    text = hook.read_text(encoding="utf-8")
+    check(text.count(HOOK_MARK) == 1, f"block count {text.count(HOOK_MARK)}")
+    check(text.startswith("#!/bin/sh\n") and "echo original >> hook.log\n" in text, "original content lost")
+    check("exit 0" not in text.split("# <<< agent-kit <<<")[0], "block must not contain exit 0")
+    code, out = commit_try(d, "feat: add y module", {"y.py": "Y = 1\n"}, t)
+    check(code == 0 and (d / "hook.log").exists(), f"original hook must still run: exit {code}: {out[:300]}")
+    # core.hooksPath
+    e = t.repo("e")
+    git(e, "config", "core.hooksPath", ".githooks")
+    (e / ".githooks").mkdir()
+    (e / ".githooks" / "pre-commit").write_text(ORIG_HOOK, encoding="utf-8", newline="\n")
+    code, out = kit("install", str(e), "--git-hooks", cwd=t.base)
+    check(code == 0, f"hooksPath install exit {code}: {out[-300:]}")
+    check(HOOK_MARK in (e / ".githooks" / "pre-commit").read_text(encoding="utf-8"), "block not in core.hooksPath dir")
+    check((e / ".githooks" / "commit-msg").is_file() and not (e / ".git" / "hooks" / "commit-msg").exists(),
+          "hooks must go to core.hooksPath only")
+
+
+@scenario("B3b", "pre-commit hook rejects a commit that contains a key, accepts a clean one")
+def b3b(t: T):
+    d = hooked_repo(t, "b")
+    code, out = commit_try(d, "feat: add settings", {"src/cfg.py": f"API_KEY = \"{FAKE_KEY}\"\n"}, t)
+    check(code != 0 and "BLOCK" in out, f"key must be rejected: exit {code}: {out[:300]}")
+    git(d, "reset", "-q")
+    (d / "src" / "cfg.py").unlink()
+    code, out = commit_try(d, "feat: add clean module", {"src/ok.py": "X = 1\n"}, t)
+    check(code == 0, f"clean commit rejected: exit {code}: {out[:300]}")
+
+
+@scenario("B3c", "commit-msg hook rejects a bad message; merge, fixup and revert messages pass")
+def b3c(t: T):
+    d = hooked_repo(t, "c")
+    code, out = commit_try(d, "bad message", {"a.py": "A = 1\n"}, t)
+    check(code != 0 and "ERROR" in out, f"bad message accepted: exit {code}: {out[:300]}")
+    for i, msg in enumerate(["Merge branch 'x'", "fixup! feat: x", "squash! feat: x", "Revert \"feat: x\""]):
+        code, out = commit_try(d, msg, {f"f{i}.py": f"V = {i}\n"}, t)
+        check(code == 0, f"{msg!r} rejected: exit {code}: {out[:300]}")
+
+
+@scenario("B3d", "--uninstall-git-hooks restores the original hook byte for byte")
+def b3d(t: T):
+    d = t.repo("d")
+    hook = d / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_bytes(ORIG_HOOK.encode("utf-8"))
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    check(code == 0 and hook.read_bytes() != ORIG_HOOK.encode("utf-8"), f"install exit {code}: {out[-200:]}")
+    code, out = kit("install", str(d), "--uninstall-git-hooks", cwd=t.base)
+    check(code == 0, f"uninstall exit {code}: {out[-300:]}")
+    check(hook.read_bytes() == ORIG_HOOK.encode("utf-8"), f"pre-commit changed: {hook.read_bytes()!r}")
+    check(not (d / ".git" / "hooks" / "commit-msg").exists(), "commit-msg created by the kit must be removed")
+    py = d / ".git" / "hooks" / "commit-msg"
+    py.write_text("#!/usr/bin/env python3\nprint('x')\n", encoding="utf-8", newline="\n")
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    check(code == 2 and py.read_text(encoding="utf-8").count("agent-kit") == 0, f"non-sh hook: exit {code}: {out[-300:]}")
+
+
 # ================================================================ V validate the real kit
 @scenario("V", "validate_skills on the real kit: exit 0, all 9 skills ok")
 def v(t: T):

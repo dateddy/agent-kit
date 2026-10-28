@@ -6,6 +6,10 @@
   python tools/install.py <repo> --force  overwrite existing .claude/skills/<name> entries
   python tools/install.py <repo> --hooks  also add a Claude Code SessionStart hook that runs `notes.py brief`
                                           (merged into <repo>/.claude/settings.json; nothing existing is overwritten)
+  python tools/install.py <repo> --git-hooks            pre-commit (gitkit scan --staged) and commit-msg (gitkit lint-msg)
+                                                        git hooks; any agent is gated, honours core.hooksPath. An existing
+                                                        hook is kept; a marked block is inserted after its shebang.
+  python tools/install.py <repo> --uninstall-git-hooks  remove only the marked blocks again
 
 Project install does:
   <repo>/.agentkit/skills/<skill>   canonical copy, agent-neutral (referenced by AGENTS.md)
@@ -18,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -94,6 +100,114 @@ def merge_hook(repo: Path) -> tuple[str, int]:
     return f"hook {path} (SessionStart -> notes.py brief)", 0
 
 
+# ---------------------------------------------------------------- git hooks
+HOOK_MARK = "# >>> agent-kit >>>"
+HOOK_BEGIN = HOOK_MARK + " managed block; remove with: install.py --uninstall-git-hooks"
+HOOK_END = "# <<< agent-kit <<<"
+HOOK_CALLS = {"pre-commit": "scan --staged", "commit-msg": 'lint-msg "$1"'}
+SH_SHEBANG = re.compile(r"^#!\s*(\S*/)?(env\s+)?(ba|da|z|k)?sh\b")
+BLOCK_RE = re.compile(re.escape(HOOK_MARK) + r".*?" + re.escape(HOOK_END) + r"\n?", re.S)
+
+
+def hook_block(name: str) -> str:
+    """POSIX sh that BLOCKs only on gitkit exit 1 (WARN passes) and never calls `exit 0`."""
+    py = shlex.quote(Path(sys.executable).as_posix())
+    return "\n".join([
+        HOOK_BEGIN,
+        f"ak_py={py}",
+        'ak_gk="$(git rev-parse --show-toplevel)/.agentkit/skills/managing-git/scripts/gitkit.py"',
+        "ak_run() {",
+        '  if [ -x "$ak_py" ]; then "$ak_py" "$@"',
+        '  elif command -v python3 >/dev/null 2>&1; then python3 "$@"',
+        '  elif command -v python >/dev/null 2>&1; then python "$@"',
+        '  elif command -v py >/dev/null 2>&1; then py -3 "$@"',
+        "  else return 0; fi",
+        "}",
+        "ak_rc=0",
+        'if [ -f "$ak_gk" ]; then',
+        f'  ak_run "$ak_gk" {HOOK_CALLS[name]} || ak_rc=$?',
+        "fi",
+        'if [ "$ak_rc" -eq 1 ]; then exit 1; fi',
+        HOOK_END,
+        "",
+    ])
+
+
+def read_raw(path: Path) -> str:
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def write_raw(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def hooks_dir(repo: Path) -> Path | None:
+    """The hooks directory git really uses (honours core.hooksPath), or None if repo is not a git toplevel."""
+    def g(*args: str) -> str | None:
+        p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=CHILD_ENV)
+        return p.stdout.strip() if p.returncode == 0 else None
+    top = g("rev-parse", "--show-toplevel")
+    if not top or Path(top).resolve() != repo:
+        return None
+    d = g("rev-parse", "--git-path", "hooks")
+    if not d:
+        return None
+    return Path(d) if Path(d).is_absolute() else repo / d
+
+
+def install_git_hook(d: Path, name: str) -> tuple[str, int]:
+    path, block = d / name, hook_block(name)
+    if not path.exists():
+        d.mkdir(parents=True, exist_ok=True)
+        write_raw(path, "#!/bin/sh\n" + block)
+        msg = f"create {path}"
+    else:
+        text = read_raw(path)
+        if HOOK_MARK in text:
+            return f"keep {path} (agent-kit block already present)", 0
+        first, _, rest = text.partition("\n")
+        if first.startswith("#!"):
+            if not SH_SHEBANG.match(first):
+                return (f"WARN {path} is not a sh hook ({first.strip()}) — left untouched; "
+                        f"call gitkit.py {HOOK_CALLS[name]} from it by hand"), 2
+            write_raw(path, first + "\n" + block + rest)
+        else:
+            write_raw(path, block + text)
+        msg = f"hook {path} (block inserted; existing content kept)"
+    path.chmod(path.stat().st_mode | 0o111)
+    return msg, 0
+
+
+def uninstall_git_hook(d: Path, name: str) -> tuple[str, int]:
+    path = d / name
+    if not path.is_file():
+        return f"skip {path} (no such hook)", 0
+    new, n = BLOCK_RE.subn("", read_raw(path))
+    if not n:
+        return f"keep {path} (no agent-kit block)", 0
+    if all(not l.strip() or l.startswith("#!") for l in new.splitlines()):
+        path.unlink()
+        return f"remove {path} (only the agent-kit block was in it)", 0
+    write_raw(path, new)
+    return f"unhook {path} (agent-kit block removed)", 0
+
+
+def git_hooks(repo: Path, action) -> int:
+    d = hooks_dir(repo)
+    if d is None:
+        print(f"WARN {repo} is not the top level of a git repository — run `git init` there first; hooks not touched")
+        return 2
+    code = 0
+    for name in HOOK_CALLS:
+        msg, c = action(d, name)
+        print(msg)
+        code = max(code, c)
+    return code
+
+
 def utf8_stdio() -> None:
     for s in (sys.stdout, sys.stderr):
         if hasattr(s, "reconfigure"):
@@ -107,8 +221,12 @@ def main() -> int:
     ap.add_argument("--user", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--hooks", action="store_true", help="add a Claude Code SessionStart hook (notes.py brief)")
+    ap.add_argument("--git-hooks", action="store_true", help="install pre-commit (scan) and commit-msg (lint-msg) git hooks")
+    ap.add_argument("--uninstall-git-hooks", action="store_true", help="remove only the agent-kit blocks from git hooks")
     a = ap.parse_args()
 
+    if a.user and (a.git_hooks or a.uninstall_git_hooks):
+        ap.error("git hooks belong to a repo; give a repo path instead of --user")
     if a.user:
         dest = Path.home() / ".claude" / "skills"
         dest.mkdir(parents=True, exist_ok=True)
@@ -129,6 +247,8 @@ def main() -> int:
     repo = Path(a.repo).resolve()
     if not repo.is_dir():
         sys.exit(f"not a directory: {repo}")
+    if a.uninstall_git_hooks:
+        return git_hooks(repo, uninstall_git_hook)
 
     canon = repo / ".agentkit" / "skills"
     canon.mkdir(parents=True, exist_ok=True)
@@ -165,6 +285,8 @@ def main() -> int:
     if a.hooks:
         msg, code = merge_hook(repo)
         print(msg)
+    if a.git_hooks:
+        code = max(code, git_hooks(repo, install_git_hook))
     print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, notes/decisions.md.")
     return code
 
