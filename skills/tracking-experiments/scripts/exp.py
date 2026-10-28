@@ -21,6 +21,7 @@ import datetime as dt
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -131,8 +132,9 @@ def records(path: Path) -> list[dict]:
 
 
 def next_id(recs: list[dict]) -> str:
-    n = max((int(r["id"][2:]) for r in recs if re.match(r"^E-\d+$", r.get("id", ""))), default=0)
-    return f"E-{n + 1:04d}"
+    """E-<4 hex>: random, so runs logged on two branches never share an id (old E-0001 stay valid)."""
+    taken = {r.get("id") for r in recs}
+    return next(i for i in iter(lambda: f"E-{secrets.token_hex(2)}", None) if i not in taken)
 
 
 def git_state(exp_dir: str) -> dict:

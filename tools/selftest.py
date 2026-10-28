@@ -33,6 +33,7 @@ SCRIPTS = {
     "rmap": SK / "economizing-context/scripts/repomap.py",
     "run": SK / "economizing-context/scripts/run.py",
     "dbg": SK / "debugging-systematically/scripts/dbg.py",
+    "ex": SK / "tracking-experiments/scripts/exp.py",
     "pk": SK / "crafting-prompts/scripts/promptkit.py",
     "validate": KIT / "tools/validate_skills.py",
     "install": KIT / "tools/install.py",
@@ -385,40 +386,49 @@ def plan_with(decisions: str) -> str:
             "Verify: python a.py\nDone: exit 0\n")
 
 
-def decided_repo(t: T, supersede: bool = False) -> Path:
+def new_id(out: str, prefix: str) -> str:
+    """The branch-safe id (prefix + 4 hex) a command printed."""
+    m = re.search(rf"\b{prefix}-[0-9a-f]{{4}}\b", out)
+    check(m is not None, f"no {prefix}-xxxx id in: {out[:200]}")
+    return m[0]
+
+
+def decided_repo(t: T, supersede: bool = False) -> tuple[Path, str, str]:
     d = t.repo()
     kit("nt", "init", cwd=d)
     code, out = kit("nt", "decide", "--topic", "storage", "--text", "Use JSON files", "--why", "small data", cwd=d)
-    check(code == 0 and "D-001" in out, f"decide: {out[:200]}")
+    check(code == 0, f"decide: {out[:200]}")
+    first, second = new_id(out, "D"), ""
     if supersede:
         code, out = kit("nt", "decide", "--topic", "storage", "--text", "Use SQLite", "--why", "grew",
-                        "--supersedes", "D-001", cwd=d)
-        check(code == 0 and "D-002" in out, f"supersede: {out[:200]}")
-    return d
+                        "--supersedes", first, cwd=d)
+        check(code == 0, f"supersede: {out[:200]}")
+        second = new_id(out, "D")
+    return d, first, second
 
 
 @scenario("DC1", "plan check: an existing Decisions id passes")
 def b3a(t: T):
-    d = decided_repo(t)
-    t.write(d, {"plan.md": plan_with("D-001")})
+    d, first, _ = decided_repo(t)
+    t.write(d, {"plan.md": plan_with(first)})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 0, f"exit {code}: {out[:300]}")
 
 
 @scenario("DC2", "plan check: a missing Decisions id BLOCKs")
 def b3b(t: T):
-    d = decided_repo(t)
-    t.write(d, {"plan.md": plan_with("D-001, D-099")})
+    d, first, _ = decided_repo(t)
+    t.write(d, {"plan.md": plan_with(f"{first}, D-099")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 1 and "D-099" in out, f"exit {code}: {out[:300]}")
 
 
 @scenario("DC3", "plan check: a superseded Decisions id WARNs and names the replacement")
 def b3c(t: T):
-    d = decided_repo(t, supersede=True)
-    t.write(d, {"plan.md": plan_with("D-001")})
+    d, first, second = decided_repo(t, supersede=True)
+    t.write(d, {"plan.md": plan_with(first)})
     code, out = kit("pl", "check", "plan.md", cwd=d)
-    check(code == 2 and "D-002" in out, f"exit {code}: {out[:300]}")
+    check(code == 2 and second in out, f"exit {code}: {out[:300]}")
 
 
 @scenario("DC4", "install copies the grilling-designs skill and /grill command")
@@ -440,13 +450,14 @@ def b4a(t: T):
     sha = git(d, "rev-parse", "HEAD").strip()
     code, out = kit("dbg", "open", "--layer", "code", "--symptom", "KeyError answer parsing model output",
                     "--repro", "python app.py", cwd=d)
-    check(code == 0 and "B-001" in out, f"open: exit {code}: {out[:200]}")
-    code, out = kit("dbg", "hypo", "B-001", "dict is missing the key", "--result", "rejected", cwd=d)
+    check(code == 0, f"open: exit {code}: {out[:200]}")
+    bid = new_id(out, "B")
+    code, out = kit("dbg", "hypo", bid, "dict is missing the key", "--result", "rejected", cwd=d)
     check(code == 0, f"hypo: exit {code}: {out[:200]}")
-    code, out = kit("dbg", "close", "B-001", "--cause", f"loader skipped {VI}", "--fix", sha, cwd=d, force_cp1252=True)
+    code, out = kit("dbg", "close", bid, "--cause", f"loader skipped {VI}", "--fix", sha, cwd=d, force_cp1252=True)
     check(code == 0, f"close: exit {code}: {out[:200]}")
     code, out = kit("dbg", "list", cwd=d, force_cp1252=True)
-    check(code == 0 and "B-001" in out and "closed" in out and f"loader skipped {VI}" in out, f"list: {out[:300]}")
+    check(code == 0 and bid in out and "closed" in out and f"loader skipped {VI}" in out, f"list: {out[:300]}")
     code, out = kit("dbg", "list", "--open", cwd=d)
     check("no bugs open" in out, f"list --open: {out[:200]}")
 
@@ -454,19 +465,20 @@ def b4a(t: T):
 @scenario("DB2", "dbg close without --cause BLOCKs")
 def b4b(t: T):
     d = t.repo()
-    kit("dbg", "open", "--layer", "data", "--symptom", "row count drops after join", cwd=d)
-    code, out = kit("dbg", "close", "B-001", cwd=d)
+    bid = new_id(kit("dbg", "open", "--layer", "data", "--symptom", "row count drops after join", cwd=d)[1], "B")
+    code, out = kit("dbg", "close", bid, cwd=d)
     check(code == 1 and "--cause" in out, f"exit {code}: {out[:200]}")
     code, out = kit("dbg", "list", "--open", cwd=d)
-    check("B-001" in out, "bug must stay open")
+    check(bid in out, "bug must stay open")
 
 
 @scenario("DB3", "a second open with a similar symptom WARNs and names the earlier bug")
 def b4c(t: T):
     d = t.repo()
-    kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer when parsing model output json", cwd=d)
+    first = new_id(kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer when parsing model output json",
+                       cwd=d)[1], "B")
     code, out = kit("dbg", "open", "--layer", "llm", "--symptom", "KeyError answer parsing model output", cwd=d)
-    check(code == 2 and "B-001" in out and "B-002" in out, f"exit {code}: {out[:300]}")
+    check(code == 2 and first in out and new_id(out, "B") != first, f"exit {code}: {out[:300]}")
     code, out = kit("dbg", "open", "--layer", "data", "--symptom", "unrelated disk quota exceeded", cwd=d)
     check(code == 0, f"unrelated bug should not warn: exit {code}: {out[:200]}")
 
@@ -478,18 +490,101 @@ def b4d(t: T):
             "instructions": ["Answer only from the documents."],
             "output": {"format": "text", "description": "A short answer."}, "cases": []}
     d = t.repo(files={"prompts/qa.spec.json": json.dumps(spec, indent=2) + "\n"})
-    kit("dbg", "open", "--layer", "llm", "--symptom", "model invents a price", cwd=d)
-    code, out = kit("dbg", "llm-case", "B-001", "--spec", "prompts/qa.spec.json", "--vars", '{"nope": "x"}',
+    bid = new_id(kit("dbg", "open", "--layer", "llm", "--symptom", "model invents a price", cwd=d)[1], "B")
+    code, out = kit("dbg", "llm-case", bid, "--spec", "prompts/qa.spec.json", "--vars", '{"nope": "x"}',
                     "--check", '{"type":"not_contains","value":"$"}', cwd=d)
     check(code == 1, f"mismatched vars should BLOCK: exit {code}: {out[:200]}")
-    code, out = kit("dbg", "llm-case", "B-001", "--spec", "prompts/qa.spec.json",
+    code, out = kit("dbg", "llm-case", bid, "--spec", "prompts/qa.spec.json",
                     "--vars", '{"question": "How much is it?"}', "--check", '{"type":"not_contains","value":"$"}', cwd=d)
     check(code == 0, f"llm-case: exit {code}: {out[:200]}")
     got = json.loads((d / "prompts/qa.spec.json").read_text(encoding="utf-8"))
     check(got["cases"] == [{"vars": {"question": "How much is it?"},
-                            "checks": [{"type": "not_contains", "value": "$"}], "source": "B-001"}], f"cases: {got['cases']}")
+                            "checks": [{"type": "not_contains", "value": "$"}], "source": bid}], f"cases: {got['cases']}")
     code, out = kit("pk", "check", "prompts/qa.spec.json", cwd=d)
     check(code == 0, f"promptkit check exit {code}: {out[:300]}")
+
+
+# ================================================================ ID branch-safe ids for append-only logs
+def legacy(path: Path, new: str, old: str) -> None:
+    """Rewrite a freshly minted id to an old sequential one, as written by an earlier kit."""
+    path.write_bytes(path.read_text(encoding="utf-8").replace(new, old).encode("utf-8"))
+
+
+@scenario("ID1", "old sequential ids (D-001, E-0001, B-001) stay valid: show, supersedes, plan Decisions, compare, close")
+def id1(t: T):
+    d = t.repo()
+    kit("nt", "init", cwd=d)
+    legacy(d / "notes/decisions.md", new_id(kit("nt", "decide", "--topic", "db", "--text", "Use JSON", cwd=d)[1], "D"),
+           "D-001")
+    code, out = kit("nt", "show", "--id", "D-001", cwd=d)
+    check(code == 0 and "D-001" in out and "Use JSON" in out, f"show old id: {out[:200]}")
+    code, out = kit("nt", "decide", "--topic", "db", "--text", "Use SQLite", "--supersedes", "D-001", cwd=d)
+    check(code == 0, f"supersede old id: exit {code}: {out[:200]}")
+    repl = new_id(out, "D")
+    t.write(d, {"plan.md": plan_with("D-001")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 2 and repl in out, f"plan cites superseded D-001: exit {code}: {out[:300]}")
+    runs = d / "experiments/runs.jsonl"
+    for name, old in (("a", "E-0001"), ("b", "E-0002")):
+        legacy(runs, new_id(kit("ex", "log", "--name", name, "--metric", "acc=0.5", cwd=d)[1], "E"), old)
+    code, out = kit("ex", "compare", "E-0001", "E-0002", cwd=d)
+    check(code == 0 and "E-0001" in out and "E-0002" in out, f"compare old ids: exit {code}: {out[:300]}")
+    code, out = kit("ex", "log", "--name", "c", "--metric", "acc=0.6", cwd=d)
+    check(new_id(out, "E") not in ("E-0001", "E-0002"), out[:200])
+    legacy(d / "notes/debug.jsonl", new_id(kit("dbg", "open", "--layer", "code", "--symptom", "boom", cwd=d)[1], "B"),
+           "B-001")
+    code, out = kit("dbg", "close", "B-001", "--cause", "typo", cwd=d)
+    check(code == 0, f"close old id: exit {code}: {out[:200]}")
+
+
+def two_branches(t: T, add) -> tuple[Path, str, str, str]:
+    """Installed repo; branches a and b each call add(d, label) -> id, then both merge into main."""
+    d = t.repo()
+    code, out = kit("install", str(d), "--with", "experiments", cwd=t.base)
+    check(code == 0, f"install exit {code}: {out[-300:]}")
+    t.commit(d, "chore: install kit")
+    ids = []
+    for b in ("a", "b"):
+        git(d, "switch", "-q", "-c", b, "main")
+        ids.append(add(d, b))
+        t.commit(d, f"chore: log {b}")
+    git(d, "switch", "-q", "main")
+    out = ""
+    for b in ("a", "b"):
+        code, o = run(["git", "merge", "--no-ff", "--no-edit", b], d)
+        out += o
+        check(code == 0, f"merge {b} must not conflict: exit {code}: {o[-300:]}")
+    check(not git(d, "diff", "--name-only", "--diff-filter=U").strip(), "unmerged paths left")
+    check(ids[0] != ids[1], f"ids must differ: {ids}")
+    return d, ids[0], ids[1], out
+
+
+@scenario("ID2", "install writes merge=union to .gitattributes once; two branches that each `nt decide` merge cleanly")
+def id2(t: T):
+    def decide(d: Path, b: str) -> str:
+        code, out = kit("nt", "decide", "--topic", f"t{b}", "--text", f"choice {b}", cwd=d)
+        check(code == 0, f"decide on {b}: {out[:200]}")
+        return new_id(out, "D")
+    d, a, b, _ = two_branches(t, decide)
+    kit("install", str(d), cwd=t.base)
+    lines = (d / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    for p in ("notes/decisions.md", "notes/debug.jsonl", "experiments/runs.jsonl"):
+        check(lines.count(f"{p} merge=union") == 1, f".gitattributes after 2 installs: {lines}")
+    code, out = kit("nt", "show", cwd=d)
+    check(code == 0 and a in out and b in out and "choice a" in out and "choice b" in out, f"show: {out[:300]}")
+
+
+@scenario("ID3", "two branches that each `ex log` merge cleanly; both runs listed with distinct ids")
+def id3(t: T):
+    def log(d: Path, b: str) -> str:
+        code, out = kit("ex", "log", "--name", f"run-{b}", "--metric", "acc=0.5", cwd=d)
+        check(code in (0, 2), f"ex log on {b}: {out[:200]}")
+        return new_id(out, "E")
+    d, a, b, _ = two_branches(t, log)
+    code, out = kit("ex", "list", cwd=d)
+    check(code == 0 and a in out and b in out, f"list: {out[:300]}")
+    code, out = kit("ex", "compare", a, b, cwd=d)
+    check(code == 0, f"compare merged runs: exit {code}: {out[:300]}")
 
 
 # ================================================================ B5 SessionStart hook

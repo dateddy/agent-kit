@@ -72,8 +72,9 @@ def default_path(r: Path) -> Path | None:
     return notes_dir(r) / "tasks" / f"{slug(b)}.plan.md" if b else None
 
 
-DEC_HEADER = re.compile(r"^## (D-\d{3,}) · ")
-DEC_ID = re.compile(r"\bD-\d{3,}\b")
+# must match keeping-notes/scripts/notes.py: D-<4 hex>, or an old sequential D-001
+DEC_HEADER = re.compile(r"^## (D-(?:[0-9a-f]{4}|\d{3,})) · ")
+DEC_ID = re.compile(r"\bD-(?:[0-9a-f]{4}|\d{3,})\b")
 
 
 def load_decisions(path: Path) -> dict[str, str | None]:

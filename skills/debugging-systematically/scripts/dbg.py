@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """dbg — a bug journal that makes debugging systematic and remembers past bugs. Stdlib only.
 
-  dbg.py open --layer code|data|llm --symptom "…" [--repro "<cmd>"]   start a bug -> B-001 (checks for repeats)
-  dbg.py hypo B-001 "…" [--result confirmed|rejected]                  record a hypothesis and its outcome
-  dbg.py close B-001 --cause "…" [--fix <sha>]                         close with the root cause (required)
+  dbg.py open --layer code|data|llm --symptom "…" [--repro "<cmd>"]   start a bug -> B-3f9a (checks for repeats)
+  dbg.py hypo B-3f9a "…" [--result confirmed|rejected]                  record a hypothesis and its outcome
+  dbg.py close B-3f9a --cause "…" [--fix <sha>]                         close with the root cause (required)
   dbg.py list [--open] [--layer L]                                     show bugs
   dbg.py similar "<text>"                                              past bugs with overlapping keywords
-  dbg.py llm-case B-001 --spec prompts/x.spec.json --vars '{"q": "…"}' --check '{"type": "not_contains", "value": "…"}'
+  dbg.py llm-case B-3f9a --spec prompts/x.spec.json --vars '{"q": "…"}' --check '{"type": "not_contains", "value": "…"}'
                                                                        turn an LLM failure into a prompt test case
 
 The journal is <notes.dir>/debug.jsonl (append-only, committed). Config: .agentkit.json "debug".min_similarity.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import subprocess
 import sys
 from datetime import datetime
@@ -131,7 +132,8 @@ def cmd_open(a, r, c):
         print("BLOCK: --symptom is empty — describe what you observed (exact error text or wrong value)")
         return BLOCK
     bugs = fold(events(path))
-    bid = f"B-{len(bugs) + 1:03d}"
+    # random, so bugs opened on two branches never share an id (old B-001 stay valid)
+    bid = next(i for i in iter(lambda: f"B-{secrets.token_hex(2)}", None) if i not in bugs)
     hits = find_similar(bugs, a.symptom, c["min_similarity"])
     append(path, {"id": bid, "event": "open", "layer": a.layer, "symptom": a.symptom.strip(),
                   "repro": a.repro or "", "branch": sh("git", "symbolic-ref", "--quiet", "--short", "HEAD")})

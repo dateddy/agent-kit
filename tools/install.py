@@ -21,6 +21,8 @@ Project install does:
   <repo>/.claude/skills/<skill>     symlink to the above (copy if symlinks are unavailable)
   <repo>/AGENTS.md, CLAUDE.md, .agentkit.json, .claude/commands/*.md   created only if missing (task, grill)
   notes/ layout + .gitignore rule   via notes.py init
+  <repo>/.gitattributes             merge=union for notes/decisions.md, notes/debug.jsonl, experiments/runs.jsonl
+                                    (append-only logs: branches that both add entries merge without a conflict)
 """
 from __future__ import annotations
 
@@ -175,6 +177,31 @@ def hook_block(name: str) -> str:
         HOOK_END,
         "",
     ])
+
+
+def union_paths(repo: Path) -> list[str]:
+    """Append-only logs that git may merge by keeping both sides' lines (dirs from .agentkit.json)."""
+    try:
+        cfg = json.loads((repo / ".agentkit.json").read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    notes = (cfg.get("notes") or {}).get("dir", "notes").strip("/")
+    exp = (cfg.get("experiments") or {}).get("dir", "experiments").strip("/")
+    return [f"{notes}/decisions.md", f"{notes}/debug.jsonl", f"{exp}/runs.jsonl"]
+
+
+def merge_gitattributes(repo: Path) -> str:
+    """Add `<log> merge=union` lines to .gitattributes; idempotent, existing lines are kept."""
+    ga = repo / ".gitattributes"
+    text = read_raw(ga) if ga.exists() else ""
+    have = {l.strip() for l in text.splitlines()}
+    add = [f"{p} merge=union" for p in union_paths(repo) if f"{p} merge=union" not in have]
+    if not add:
+        return f"keep {ga}"
+    nl = "\r\n" if "\r\n" in text else "\n"
+    sep = "" if not text or text.endswith("\n") else nl
+    write_raw(ga, text + sep + nl.join(add) + nl)
+    return f"{'update' if text else 'create'} {ga} (merge=union for append-only logs)"
 
 
 def read_raw(path: Path) -> str:
@@ -348,13 +375,15 @@ def main() -> int:
     r = subprocess.run([sys.executable, str(canon / "keeping-notes" / "scripts" / "notes.py"), "init"],
                        cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", env=CHILD_ENV)
     print(r.stdout.strip() or r.stderr.strip())
+    print(merge_gitattributes(repo))
     code = 0
     if a.hooks:
         msg, code = merge_hook(repo)
         print(msg)
     if a.git_hooks:
         code = max(code, git_hooks(repo, install_git_hook))
-    print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, notes/decisions.md.")
+    print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, .gitattributes, "
+          "notes/decisions.md.")
     return code
 
 

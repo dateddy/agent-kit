@@ -286,7 +286,7 @@ Done: search("aspirin", 2) returns 2 docs containing "aspirin"
 
 **Two stores:**
 - `notes/tasks/<branch>.md`: one note per task branch. Holds the goal, plan checklist, next action, touched files and a log. Personal, gitignored. Switching branch switches task, and notes are never overwritten.
-- `notes/decisions.md`: project-wide, append-only, committed. Each entry has an id (`D-007`), date, topic and branch. To change a decision, add a new one with `--supersedes D-007`; the old one stays as history.
+- `notes/decisions.md`: project-wide, append-only, committed. Each entry has an id (`D-3f9a`: 4 random hex, so two branches never mint the same one; old `D-007` ids stay valid), date, topic and branch. To change a decision, add a new one with `--supersedes D-007`; the old one stays as history.
 
 **Commands**
 
@@ -414,7 +414,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 
 | Command | Purpose |
 |---|---|
-| `dbg open --layer code\|data\|llm --symptom "…" [--repro "<cmd>"]` | Start a bug (`B-001`); prints similar past bugs, a repeat is a WARN (exit 2) |
+| `dbg open --layer code\|data\|llm --symptom "…" [--repro "<cmd>"]` | Start a bug (`B-3f9a`); prints similar past bugs, a repeat is a WARN (exit 2) |
 | `dbg hypo B-001 "…" [--result confirmed\|rejected]` | Record one hypothesis and what testing it showed |
 | `dbg close B-001 --cause "…" [--fix <sha>]` | Close with the root cause; without `--cause` it BLOCKs (exit 1) |
 | `dbg list [--open] [--layer L]` | Show bugs |

@@ -12,8 +12,8 @@ Subcommands:
   task [--goal G] [--plan S]... [--check N]... [--done TXT] [--next TXT]
        [--files F...] [--status S]   create/update the current branch's note
   brief [--topic T]... [--log N]     compact context pack for a new session
-  decide --topic T --text TXT [--why W] [--supersedes D-007]
-  show [--topic T] [--id D-007] [--branch B] [--all] [--limit N]
+  decide --topic T --text TXT [--why W] [--supersedes D-3f9a]
+  show [--topic T] [--id D-3f9a] [--branch B] [--all] [--limit N]
   tasks [--all]                      list task notes
   close [--branch B] [--status S]    mark a task done/abandoned
   sync                               mark notes of merged/deleted branches done
@@ -24,6 +24,7 @@ import argparse
 import datetime as dt
 import json
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,8 @@ DEFAULTS = {
     "base_branch": None,
 }
 STATUSES = ("active", "blocked", "done", "abandoned")
-DEC_HEADER = re.compile(r"^## (D-\d{3,}) · (\d{4}-\d{2}-\d{2}) · ([a-z0-9._-]+) · (\S+)\s*$")
+# ids: D-<4 hex> (random, so two branches never mint the same one); old sequential D-001 stay valid
+DEC_HEADER = re.compile(r"^## (D-(?:[0-9a-f]{4}|\d{3,})) · (\d{4}-\d{2}-\d{2}) · ([a-z0-9._-]+) · (\S+)\s*$")
 
 
 # ---------------------------------------------------------------- env
@@ -301,7 +303,8 @@ def cmd_decide(a, r, cfg, base):
         print("BLOCK:", e)
     if errs:
         return BLOCK
-    nid = f"D-{(max((int(e['id'][2:]) for e in entries), default=0) + 1):03d}"
+    taken = {e["id"] for e in entries}
+    nid = next(i for i in iter(lambda: f"D-{secrets.token_hex(2)}", None) if i not in taken)
     entry = [f"## {nid} · {today()} · {topic} · {current_branch() or '-'}"] + body
     if a.supersedes:
         entry.append(f"Supersedes: {a.supersedes}")
