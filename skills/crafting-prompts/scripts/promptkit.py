@@ -48,7 +48,7 @@ PLACE = re.compile(r"\{\{\s*([A-Za-z_][\w-]*)\s*\}\}")
 
 
 def sh(*cmd: str) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -429,7 +429,14 @@ def cmd_targets(a, r, c):
     return OK
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(prog="promptkit", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("init"); s.add_argument("name"); s.add_argument("--target", default="generic")

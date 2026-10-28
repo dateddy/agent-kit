@@ -14,10 +14,14 @@ You may say a task or step is **done** only when `vf` exits `0` in this session,
 
 | Exit | Verdict | What you do |
 |---|---|---|
-| 0 | PASS | Report done; quote the verdict line |
-| 1 | FAIL | Fix the cause, re-run. Never report done |
-| 2 | NOTHING VERIFIED | Tell the user no gate ran; ask whether to configure `verify` in `.agentkit.json` |
-| 2 | PASS WITH TEST CHANGES | List the flagged test changes to the user; wait for their OK |
+| 0 | PASS (exit 0) | Report done; quote the verdict line |
+| 1 | FAIL (exit 1) | Fix the cause, re-run. Never report done |
+| 2 | NOTHING VERIFIED (exit 2) | Tell the user no gate ran; ask whether to configure `verify` in `.agentkit.json` |
+| 2 | PASS WITH TEST CHANGES (exit 2) | List the flagged test changes to the user; wait for their OK |
+
+`vf --affected` is for the **inner loop only** (verdict says `(affected only)`). A full `vf` is still required before commit and before saying "done". If repomap is missing or fails, it runs the full test gate and says why.
+
+**Never pipe `vf`** (`vf | tail` loses the exit code). The `VERDICT:` line, which carries its exit code, is authoritative.
 
 ## Workflow
 
@@ -25,6 +29,7 @@ You may say a task or step is **done** only when `vf` exits `0` in this session,
 - [ ] vf --detect            once per repo/session: see which gates exist
 - [ ] edit code
 - [ ] vf --only lint,test    fast loop while iterating (skip slow gates)
+- [ ] vf --affected          inner loop: only tests in the changed files' blast radius
 - [ ] vf                     full run before commit / before saying "done"
 ```
 
@@ -39,4 +44,5 @@ If a test is genuinely wrong (spec changed), say so, explain why, and get the us
 
 - Tool not installed → install it if the project declares it (requirements/devDependencies), otherwise tell the user.
 - Detection is wrong → the user sets `"verify": {"test": "pytest tests/unit -q"}` in `.agentkit.json` (`null` disables a gate).
+- Test runner is chosen by probing: `python -m pytest --version`; if that fails and the tests use `unittest.TestCase`, `vf` runs `unittest discover`. `vf --detect` states the reason.
 - No tests cover the change → say so explicitly; offer to add a test for the new behavior.

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,6 +28,8 @@ MAX_ERROR_LINES = 25
 MAX_TRACEBACK_LINES = 30
 KEEP_LOGS = 50  # oldest logs beyond this are pruned
 
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 ERROR_RE = re.compile(
     r"(\berror\b|\w+Error\b|\w+Exception\b|\bexception\b|\bfatal\b|\bpanic\b|\bfailed\b|\bfailure\b|assertionerror|"
@@ -36,7 +39,7 @@ NOISE_RE = re.compile(r"(\b0 errors?\b|\berror[s]?: 0\b|errors=0|0 failed|warnin
 
 
 def repo_root() -> Path:
-    p = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    p = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return Path(p.stdout.strip()) if p.returncode == 0 else Path.cwd()
 
 
@@ -79,7 +82,14 @@ def prune(logdir: Path) -> None:
         p.unlink(missing_ok=True)
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tail", type=int, default=DEFAULT_TAIL)
     ap.add_argument("--name", help="log file label (default: first word of the command)")
@@ -100,7 +110,7 @@ def main() -> int:
     t0 = time.time()
     try:
         p = subprocess.run(cmd[0] if shell else cmd, shell=shell, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, timeout=a.timeout)
+                           stderr=subprocess.STDOUT, timeout=a.timeout, env=CHILD_ENV)
         raw, code = p.stdout.decode("utf-8", "replace"), p.returncode
     except subprocess.TimeoutExpired as e:
         raw, code = (e.stdout or b"").decode("utf-8", "replace") + f"\n[killed after {a.timeout}s timeout]", 124

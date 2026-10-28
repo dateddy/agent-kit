@@ -5,65 +5,41 @@ description: Runs git workflows (commit, branch, stash, merge, rebase, push, con
 
 # Managing git
 
-`scripts/gitkit.py` decides; you write prose. Run it, obey exit codes:
-`0` OK → continue · `2` WARN → quote the warning and the exact next command to the user, continue only after an explicit yes · `1` BLOCK → stop, fix the cause, re-run.
-
-Path: `python <this-skill>/scripts/gitkit.py <cmd>` (shown below as `gk`). Config: repo `.agentkit.json` → `git` section.
-
-## Decision boundary
-
-| Script decides (never override) | You decide | User decides (always ask) |
-|---|---|---|
-| message format, allowed types/scopes | how to group files into commits | anything in "Destructive ops" |
-| secret block, preflight safety checks | commit subject/body wording | splitting into >1 commit |
-| when to ask (protected branch = WARN) | | committing directly on a protected branch |
-| type when all files match a rule | feat vs fix vs refactor when UNDECIDED | merge vs rebase strategy |
-| conflict prediction, branch naming | how to resolve a conflict hunk | false-positive secret override |
+`scripts/gitkit.py` decides; you write prose. Obey its exit codes: `0` OK → continue · `2` WARN → quote the warning and the exact next command, continue only after an explicit yes · `1` BLOCK → stop, fix the cause, re-run.
+Run `python <this-skill>/scripts/gitkit.py <cmd>` (below: `gk`). Config: `.agentkit.json` → `git`. Who decides what (script, you, user): [reference/boundaries.md](reference/boundaries.md).
 
 ## Commit
 
 ```
-- [ ] 1. gk snapshot
-- [ ] 2. Group changes by concern. >1 group → propose groups to user, one commit each
-- [ ] 3. git add <explicit paths>      (never `git add -A`/`.` unless user said "all")
-- [ ] 4. gk preflight commit           (WARN on protected branch → ask: commit here or new branch?)
-- [ ] 5. gk scan --staged
-- [ ] 6. gk suggest --staged           (rule-decided type wins)
-- [ ] 7. gk diff --staged              (capped; read only what you need)
-- [ ] 8. write message to .git/AGENT_MSG → gk lint-msg .git/AGENT_MSG → fix until 0
-- [ ] 9. git commit -F .git/AGENT_MSG && gk snapshot --log 1
+1. git status -sb && git log --oneline -5
+2. Group changes by concern; >1 group → propose the groups to the user, one commit each.
+   Kit files (notes/, .agentkit/, .agentkit.json) never count as a concern.
+3. git add <explicit paths>     (never -A / . unless the user said "all")
+4. gk preflight commit          (protected-branch WARN → ask: commit here or new branch?)
+5. gk scan --staged
+6. gk diff --staged             (capped; read only what you need)
+7. write the message to .git/AGENT_MSG (type: reference/commit-examples.md) → gk lint-msg .git/AGENT_MSG until 0
+8. git commit -F .git/AGENT_MSG && git log --oneline -1
 ```
 
-Message rules (lint enforces the rest): subject says *what* in imperative; body (optional, for non-trivial changes) says *why* and side effects, not a file list. Examples: [reference/commit-examples.md](reference/commit-examples.md).
-
-Amend only the last **unpushed** commit (`git commit --amend`), and only if user asked.
+- Code + its tests + its doc line = one commit. Never split them and never ask about it.
+- Subject says *what*, imperative; body (non-trivial changes) says *why* and side effects, not a file list. [Examples](reference/commit-examples.md).
+- Installed git hooks run `scan --staged` and `lint-msg` on `git commit`. Never pass `--no-verify`; fix a hook BLOCK.
+- `git commit --amend` only on **your own latest, unpushed** commit (`git branch -r --contains HEAD` prints nothing),
+  and say in your reply that you amended it. Never amend a commit you did not make in this task, or a pushed one.
 
 ## Branch
 
-One task = one branch (keeping-notes keys task notes by branch name).
+One task = one branch (task notes are keyed by branch name). `gk branch-name <type> <short description> [--ticket ABC-12]`
+→ `git switch -c <name>` from the intended base (ask if unclear). Uncommitted work moves with `switch -c`; no stash needed.
 
-1. `gk branch-name <type> <short description> [--ticket ABC-12]` → prints name.
-2. `git switch -c <name>` (from the intended base; ask if base is unclear).
-3. Uncommitted work on a protected branch moves with `switch -c` — no stash needed.
+## Stash, merge, rebase, pull, push
 
-## Stash
-
-- Save: `git stash push -m "<why>" [-- paths]` (always with message; add `-u` only for untracked files the user wants kept).
-- List: `gk stashes`. Restore: `gk preflight stash-pop` → `git stash apply stash@{n}` → verify → `git stash drop stash@{n}`.
-
-## Merge / rebase / pull / push
-
-1. `git fetch --prune`
-2. `gk preflight merge <target>` (or `rebase`, `pull`, `push`). Read predicted conflicts.
-3. Default strategy: merge into feature branch from base; rebase only unpushed local branches. Ask user if unsure.
-4. Conflicts → follow [reference/conflicts.md](reference/conflicts.md).
-5. Push: `git push -u origin <branch>` first time; after a rebase of a pushed branch: `git push --force-with-lease` (ask first).
+`gk preflight <op>` first (`stash-pop`, `merge <target>`, `rebase`, `pull`, `push`) and read the predicted conflicts.
+Steps and default strategy: [reference/sync.md](reference/sync.md). Conflicts: [reference/conflicts.md](reference/conflicts.md).
 
 ## Destructive ops — ask the user, quote the exact command, wait for "yes"
 
 `reset --hard`, `push --force*`, `branch -D`, `clean -fd`, `stash drop/clear`, `rebase` of a pushed branch, `checkout -- <file>`/`restore` of uncommitted work, `filter-repo`, deleting remote branches.
-Before any of them: `git branch backup/<name>-<yyyymmdd>` or note the SHA from `git reflog`, so it is recoverable.
-
-## Recovering
-
-Lost commit / bad reset → `git reflog -n 20`, then `git branch rescue <sha>`. Details: [reference/recovery.md](reference/recovery.md).
+Before any of them: `git branch backup/<name>-<yyyymmdd>` or note the SHA from `git reflog`.
+Lost commit / bad reset → `git reflog -n 20`, then `git branch rescue <sha>`; more in [reference/recovery.md](reference/recovery.md).

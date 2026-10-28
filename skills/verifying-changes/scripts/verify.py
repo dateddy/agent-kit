@@ -5,6 +5,8 @@
   verify.py --only lint,test
   verify.py --detect        print the commands that would run, and why
   verify.py --no-guard      skip the test-tampering check
+  verify.py --affected      inner loop: run only the tests in the blast radius of the changed files
+                            (uses economizing-context/repomap.py --zone-from-diff; full gate if unavailable)
 
 Gate commands come from .agentkit.json "verify" (string = command, null/"" = skip,
 "auto"/missing = auto-detect). Full logs go to .agentkit/logs/.
@@ -17,6 +19,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import shlex
 import shutil
@@ -24,6 +27,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 GATES = ("format", "lint", "typecheck", "test")
 MAX_ERR = 15  # error lines shown per failed gate
@@ -36,7 +41,7 @@ SKIP_RE = re.compile(r"(pytest\.mark\.(skip|xfail)|@unittest\.skip|\b(it|test|de
 
 
 def sh(*cmd: str, cwd: Path | None = None) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, encoding="utf-8", errors="replace")
     return p.stdout if p.returncode == 0 else ""
 
 
@@ -52,15 +57,30 @@ def has_tool(cmd: str) -> bool:
     if not parts:
         return False
     if parts[0] in ("python", "python3") and len(parts) > 2 and parts[1] == "-m":
-        return subprocess.run([sys.executable, "-c", f"import {parts[2]}"], capture_output=True).returncode == 0
+        return subprocess.run([sys.executable, "-c", f"import {parts[2]}"], capture_output=True,
+                              env=CHILD_ENV).returncode == 0
     return shutil.which(parts[0]) is not None
 
 
 # ---------------------------------------------------------------- detection
+def probe_pytest(root: Path) -> tuple[bool, str]:
+    """Is `python -m pytest` runnable here? Returns (ok, version line | first error line)."""
+    try:
+        p = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=root, timeout=20, env=CHILD_ENV)
+    except subprocess.TimeoutExpired:
+        return False, "pytest not runnable: probe timed out after 20s"
+    lines = [l.strip() for l in (p.stdout + "\n" + p.stderr).splitlines() if l.strip()]
+    if p.returncode == 0:
+        return True, lines[0] if lines else "pytest"
+    err = next((l for l in lines if re.search(r"\w+(Error|Exception)\b", l)), lines[0] if lines else f"exit {p.returncode}")
+    return False, f"pytest not runnable: {err[:140]}"
+
+
 def detect(root: Path) -> dict[str, tuple[str | None, str]]:
     """Return gate -> (command or None, reason)."""
     found: dict[str, tuple[str | None, str]] = {}
-    py = sys.executable if " " not in sys.executable else "python"
+    py = Path(sys.executable).as_posix() if " " not in sys.executable else "python"
     pyproject = read(root / "pyproject.toml")
     setup_cfg = read(root / "setup.cfg")
     reqs = " ".join(read(p) for p in root.glob("requirements*.txt")).lower() + pyproject.lower()
@@ -79,9 +99,22 @@ def detect(root: Path) -> dict[str, tuple[str | None, str]]:
             found["typecheck"] = ("mypy .", "mypy configured")
         elif (root / "pyrightconfig.json").exists() or "[tool.pyright" in pyproject:
             found["typecheck"] = ("pyright", "pyright configured")
-        if "[tool.pytest" in pyproject or (root / "pytest.ini").exists() or (root / "conftest.py").exists() \
-                or "pytest" in reqs or any((root / d).is_dir() for d in ("tests", "test")):
-            found["test"] = (f"{py} -m pytest -q", "pytest config or tests/ dir")
+
+    # --- Python tests: independent of config files; the runner is chosen by probing
+    pytest_cfg = "[tool.pytest" in pyproject or (root / "pytest.ini").exists() or (root / "conftest.py").exists() \
+        or "pytest" in reqs
+    test_dirs = [d for d in ("tests", "test") if (root / d).is_dir()]
+    test_files = [p for d in test_dirs for p in (root / d).rglob("test*.py")] + list(root.glob("test_*.py"))
+    if pytest_cfg or test_files:
+        ok, why = probe_pytest(root)
+        if ok:
+            found["test"] = (f"{py} -m pytest -q", f"pytest runnable: {why}")
+        elif any("unittest.TestCase" in read(p) for p in test_files):
+            d = next((d for d in test_dirs if list((root / d).rglob("test*.py"))), ".")
+            top = " -t ." if d != "." and (root / d / "__init__.py").exists() else ""
+            found["test"] = (f"{py} -m unittest discover -s {d}{top}", f"unittest TestCase found; {why}")
+        else:
+            found["test"] = (None, why)
 
     # --- JavaScript / TypeScript
     pkg_path = root / "package.json"
@@ -127,6 +160,43 @@ def detect(root: Path) -> dict[str, tuple[str | None, str]]:
     return found
 
 
+# ---------------------------------------------------------------- affected tests
+def affected_tests(root: Path) -> tuple[list[str] | None, str]:
+    """Test files in the blast radius of the working-tree changes, or (None, why) if unknown."""
+    rm = Path(__file__).resolve().parents[2] / "economizing-context" / "scripts" / "repomap.py"
+    if not rm.is_file():
+        return None, "economizing-context/repomap.py not installed"
+    try:
+        p = subprocess.run([sys.executable, str(rm), "--zone-from-diff", "--json"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=root, timeout=60, env=CHILD_ENV)
+    except subprocess.TimeoutExpired:
+        return None, "repomap --zone-from-diff timed out"
+    if p.returncode != 0:
+        first = next(iter((p.stdout or p.stderr).strip().splitlines()), "no output")
+        return None, f"repomap exited {p.returncode}: {first}"[:200]
+    try:
+        return list(json.loads(p.stdout)["tests"]), ""
+    except (ValueError, KeyError):
+        return None, "repomap returned invalid JSON"
+
+
+def narrow_test_cmd(root: Path, cmd: str, tests: list[str]) -> str | None:
+    """The test command restricted to `tests`, or None if this runner is not supported."""
+    if "-m pytest" in cmd:
+        return cmd + " " + " ".join(f'"{x}"' for x in tests)
+    if "-m unittest" in cmd:
+        py = cmd.split(" -m unittest")[0]
+        files = [x for x in tests if x.endswith(".py")]
+        if all((root / Path(x).parent / "__init__.py").exists() for x in files):
+            return f"{py} -m unittest " + " ".join(x[:-3].replace("/", ".") for x in files)
+        # tests/ is a plain directory: a regular `tests` package elsewhere on sys.path could shadow it,
+        # so put each test dir on sys.path and load the modules by file name
+        dirs = ", ".join(repr(d) for d in dict.fromkeys(Path(x).parent.as_posix() for x in files))
+        argv = ", ".join(repr(s) for s in ["unittest", *(Path(x).stem for x in files)])
+        return f'{py} -c "import sys, unittest; sys.path[:0] = [{dirs}]; unittest.main(module=None, argv=[{argv}])"'
+    return None
+
+
 # ---------------------------------------------------------------- running
 def run_gate(root: Path, gate: str, cmd: str) -> tuple[str, float, list[str], Path]:
     logdir = root / ".agentkit" / "logs"
@@ -134,7 +204,8 @@ def run_gate(root: Path, gate: str, cmd: str) -> tuple[str, float, list[str], Pa
     (logdir / ".gitignore").exists() or (logdir / ".gitignore").write_text("*\n")  # logs never get committed
     log = logdir / f"verify-{gate}-{dt.datetime.now():%Y%m%d-%H%M%S}.log"
     t0 = time.time()
-    p = subprocess.run(cmd, shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(cmd, shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       env=CHILD_ENV)
     out = p.stdout.decode("utf-8", "replace")
     log.write_text(out, encoding="utf-8")
     dur = time.time() - t0
@@ -176,11 +247,19 @@ def tamper_check(root: Path) -> list[str]:
     return list(dict.fromkeys(notes))
 
 
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", help="comma list of gates: " + ",".join(GATES))
     ap.add_argument("--detect", action="store_true")
     ap.add_argument("--no-guard", action="store_true")
+    ap.add_argument("--affected", action="store_true", help="test only what the changed files can affect")
     a = ap.parse_args()
     top = sh("git", "rev-parse", "--show-toplevel").strip()
     root = Path(top) if top else Path.cwd()
@@ -198,9 +277,21 @@ def main() -> int:
             print(f"{g:10} {cmd or '-':40} ({why}){avail}")
         return 0
 
-    rows, details, failed, ran = [], [], False, 0
+    rows, details, failed, ran, affected_applied = [], [], False, 0, False
     for g in wanted:
         cmd, why = gates[g]
+        if g == "test" and a.affected and cmd:
+            tests, reason = affected_tests(root)
+            if tests is None:
+                details.append(f"--- note: affected: {reason} — ran full test gate")
+            elif not tests:
+                affected_applied = True
+                rows.append(f"{g:10} SKIP   no affected tests")
+                continue
+            elif (narrow := narrow_test_cmd(root, cmd, tests)) is None:
+                details.append("--- note: runner is not pytest/unittest — ran full test gate")
+            else:
+                cmd, affected_applied = narrow, True
         if not cmd:
             rows.append(f"{g:10} SKIP   {why}")
             continue
@@ -224,16 +315,17 @@ def main() -> int:
     if tamper:
         print("--- TEST INTEGRITY (report these to the user; do not hide them)")
         print("\n".join("  " + t for t in tamper))
+    tag = " (affected only)" if affected_applied else ""
     if failed:
-        print("VERDICT: FAIL — fix the cause, re-run verify. Do not report the task as done.")
+        print(f"VERDICT: FAIL (exit 1){tag} — fix the cause, re-run verify. Do not report the task as done.")
         return 1
     if ran == 0:
-        print("VERDICT: NOTHING VERIFIED — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
+        print(f"VERDICT: NOTHING VERIFIED (exit 2){tag} — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
         return 2
     if tamper:
-        print("VERDICT: PASS WITH TEST CHANGES — get the user's OK on the changes above before reporting done.")
+        print(f"VERDICT: PASS WITH TEST CHANGES (exit 2){tag} — get the user's OK on the changes above before reporting done.")
         return 2
-    print("VERDICT: PASS")
+    print(f"VERDICT: PASS (exit 0){tag}")
     return 0
 
 

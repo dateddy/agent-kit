@@ -1,0 +1,30 @@
+name: selftest
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  selftest:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Git identity for throwaway repos
+        run: |
+          git config --global user.name "agent-kit-ci"
+          git config --global user.email "ci@example.com"
+      - name: Validate skills
+        run: python tools/validate_skills.py
+      - name: Selftest
+        run: python tools/selftest.py
+      - name: Selftest with a cp1252 console
+        run: python tools/selftest.py --cp1252

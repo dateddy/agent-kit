@@ -1,0 +1,8 @@
+{
+  "verify": {
+    "test": "python tools/selftest.py",
+    "lint": null,
+    "typecheck": null,
+    "format": null
+  }
+}
