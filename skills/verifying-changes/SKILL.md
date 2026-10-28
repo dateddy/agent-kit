@@ -19,6 +19,8 @@ You may say a task or step is **done** only when `vf` exits `0` in this session,
 | 2 | NOTHING VERIFIED (exit 2) | Tell the user no gate ran; ask whether to configure `verify` in `.agentkit.json` |
 | 2 | PASS WITH TEST CHANGES (exit 2) | List the flagged test changes to the user; wait for their OK |
 
+`vf --affected` is for the **inner loop only** (verdict says `(affected only)`). A full `vf` is still required before commit and before saying "done". If repomap is missing or fails, it runs the full test gate and says why.
+
 **Never pipe `vf`** (`vf | tail` loses the exit code). The `VERDICT:` line, which carries its exit code, is authoritative.
 
 ## Workflow
@@ -27,6 +29,7 @@ You may say a task or step is **done** only when `vf` exits `0` in this session,
 - [ ] vf --detect            once per repo/session: see which gates exist
 - [ ] edit code
 - [ ] vf --only lint,test    fast loop while iterating (skip slow gates)
+- [ ] vf --affected          inner loop: only tests in the changed files' blast radius
 - [ ] vf                     full run before commit / before saying "done"
 ```
 

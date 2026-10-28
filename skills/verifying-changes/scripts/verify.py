@@ -5,6 +5,8 @@
   verify.py --only lint,test
   verify.py --detect        print the commands that would run, and why
   verify.py --no-guard      skip the test-tampering check
+  verify.py --affected      inner loop: run only the tests in the blast radius of the changed files
+                            (uses economizing-context/repomap.py --zone-from-diff; full gate if unavailable)
 
 Gate commands come from .agentkit.json "verify" (string = command, null/"" = skip,
 "auto"/missing = auto-detect). Full logs go to .agentkit/logs/.
@@ -158,6 +160,43 @@ def detect(root: Path) -> dict[str, tuple[str | None, str]]:
     return found
 
 
+# ---------------------------------------------------------------- affected tests
+def affected_tests(root: Path) -> tuple[list[str] | None, str]:
+    """Test files in the blast radius of the working-tree changes, or (None, why) if unknown."""
+    rm = Path(__file__).resolve().parents[2] / "economizing-context" / "scripts" / "repomap.py"
+    if not rm.is_file():
+        return None, "economizing-context/repomap.py not installed"
+    try:
+        p = subprocess.run([sys.executable, str(rm), "--zone-from-diff", "--json"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=root, timeout=60, env=CHILD_ENV)
+    except subprocess.TimeoutExpired:
+        return None, "repomap --zone-from-diff timed out"
+    if p.returncode != 0:
+        first = next(iter((p.stdout or p.stderr).strip().splitlines()), "no output")
+        return None, f"repomap exited {p.returncode}: {first}"[:200]
+    try:
+        return list(json.loads(p.stdout)["tests"]), ""
+    except (ValueError, KeyError):
+        return None, "repomap returned invalid JSON"
+
+
+def narrow_test_cmd(root: Path, cmd: str, tests: list[str]) -> str | None:
+    """The test command restricted to `tests`, or None if this runner is not supported."""
+    if "-m pytest" in cmd:
+        return cmd + " " + " ".join(f'"{x}"' for x in tests)
+    if "-m unittest" in cmd:
+        py = cmd.split(" -m unittest")[0]
+        files = [x for x in tests if x.endswith(".py")]
+        if all((root / Path(x).parent / "__init__.py").exists() for x in files):
+            return f"{py} -m unittest " + " ".join(x[:-3].replace("/", ".") for x in files)
+        # tests/ is a plain directory: a regular `tests` package elsewhere on sys.path could shadow it,
+        # so put each test dir on sys.path and load the modules by file name
+        dirs = ", ".join(repr(d) for d in dict.fromkeys(Path(x).parent.as_posix() for x in files))
+        argv = ", ".join(repr(s) for s in ["unittest", *(Path(x).stem for x in files)])
+        return f'{py} -c "import sys, unittest; sys.path[:0] = [{dirs}]; unittest.main(module=None, argv=[{argv}])"'
+    return None
+
+
 # ---------------------------------------------------------------- running
 def run_gate(root: Path, gate: str, cmd: str) -> tuple[str, float, list[str], Path]:
     logdir = root / ".agentkit" / "logs"
@@ -220,6 +259,7 @@ def main() -> int:
     ap.add_argument("--only", help="comma list of gates: " + ",".join(GATES))
     ap.add_argument("--detect", action="store_true")
     ap.add_argument("--no-guard", action="store_true")
+    ap.add_argument("--affected", action="store_true", help="test only what the changed files can affect")
     a = ap.parse_args()
     top = sh("git", "rev-parse", "--show-toplevel").strip()
     root = Path(top) if top else Path.cwd()
@@ -237,9 +277,21 @@ def main() -> int:
             print(f"{g:10} {cmd or '-':40} ({why}){avail}")
         return 0
 
-    rows, details, failed, ran = [], [], False, 0
+    rows, details, failed, ran, affected_applied = [], [], False, 0, False
     for g in wanted:
         cmd, why = gates[g]
+        if g == "test" and a.affected and cmd:
+            tests, reason = affected_tests(root)
+            if tests is None:
+                details.append(f"--- note: affected: {reason} — ran full test gate")
+            elif not tests:
+                affected_applied = True
+                rows.append(f"{g:10} SKIP   no affected tests")
+                continue
+            elif (narrow := narrow_test_cmd(root, cmd, tests)) is None:
+                details.append("--- note: runner is not pytest/unittest — ran full test gate")
+            else:
+                cmd, affected_applied = narrow, True
         if not cmd:
             rows.append(f"{g:10} SKIP   {why}")
             continue
@@ -263,16 +315,17 @@ def main() -> int:
     if tamper:
         print("--- TEST INTEGRITY (report these to the user; do not hide them)")
         print("\n".join("  " + t for t in tamper))
+    tag = " (affected only)" if affected_applied else ""
     if failed:
-        print("VERDICT: FAIL (exit 1) — fix the cause, re-run verify. Do not report the task as done.")
+        print(f"VERDICT: FAIL (exit 1){tag} — fix the cause, re-run verify. Do not report the task as done.")
         return 1
     if ran == 0:
-        print("VERDICT: NOTHING VERIFIED (exit 2) — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
+        print(f"VERDICT: NOTHING VERIFIED (exit 2){tag} — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
         return 2
     if tamper:
-        print("VERDICT: PASS WITH TEST CHANGES (exit 2) — get the user's OK on the changes above before reporting done.")
+        print(f"VERDICT: PASS WITH TEST CHANGES (exit 2){tag} — get the user's OK on the changes above before reporting done.")
         return 2
-    print("VERDICT: PASS (exit 0)")
+    print(f"VERDICT: PASS (exit 0){tag}")
     return 0
 
 

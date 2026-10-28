@@ -295,6 +295,38 @@ def b1d(t: T):
     check("NOTE: dynamic import in x.py:6" in out and "import importlib" not in out, f"text: {out[:300]}")
 
 
+# ================================================================ B2 affected
+def affected_repo(t: T, name: str) -> Path:
+    d = t.repo(name, files={
+        "a.py": "import c\n", "c.py": "X = 1\n", "d.py": "Y = 2\n",
+        "tests/test_c.py": "import unittest\nimport c\n\n\nclass T(unittest.TestCase):\n"
+                           "    def test_c(self):\n        self.assertEqual(c.X, 1)\n",
+        "tests/test_d.py": "import unittest\nimport d\n\n\nclass T(unittest.TestCase):\n"
+                           "    def test_d(self):\n        self.assertEqual(d.Y, 3)\n",   # fails on purpose
+    })
+    t.write(d, {"c.py": "X = 1\n# touched\n"})
+    return d
+
+
+@scenario("B2a", "vf --affected runs only the tests in the changed file's zone")
+def b2a(t: T):
+    d = affected_repo(t, "r")
+    code, out = kit("vf", cwd=d)
+    check(code == 1 and "VERDICT: FAIL (exit 1)" in out, f"full run should FAIL on test_d: exit {code}: {out[:300]}")
+    code, out = kit("vf", "--affected", cwd=d)
+    check(code == 0 and "VERDICT: PASS (exit 0) (affected only)" in out, f"exit {code}: {out[:400]}")
+
+
+@scenario("B2b", "vf --affected without repomap falls back to the full test gate and says why")
+def b2b(t: T):
+    d = affected_repo(t, "r")
+    lone = t.sub("lone") / "verifying-changes"
+    shutil.copytree(SK / "verifying-changes", lone, ignore=shutil.ignore_patterns("__pycache__"))
+    code, out = run([sys.executable, lone / "scripts" / "verify.py", "--affected"], d)
+    check(code == 1 and "affected:" in out and "ran full test gate" in out and "(affected only)" not in out,
+          f"exit {code}: {out[:400]}")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252
