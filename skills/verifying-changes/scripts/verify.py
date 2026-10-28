@@ -61,10 +61,24 @@ def has_tool(cmd: str) -> bool:
 
 
 # ---------------------------------------------------------------- detection
+def probe_pytest(root: Path) -> tuple[bool, str]:
+    """Is `python -m pytest` runnable here? Returns (ok, version line | first error line)."""
+    try:
+        p = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=root, timeout=20, env=CHILD_ENV)
+    except subprocess.TimeoutExpired:
+        return False, "pytest not runnable: probe timed out after 20s"
+    lines = [l.strip() for l in (p.stdout + "\n" + p.stderr).splitlines() if l.strip()]
+    if p.returncode == 0:
+        return True, lines[0] if lines else "pytest"
+    err = next((l for l in lines if re.search(r"\w+(Error|Exception)\b", l)), lines[0] if lines else f"exit {p.returncode}")
+    return False, f"pytest not runnable: {err[:140]}"
+
+
 def detect(root: Path) -> dict[str, tuple[str | None, str]]:
     """Return gate -> (command or None, reason)."""
     found: dict[str, tuple[str | None, str]] = {}
-    py = sys.executable if " " not in sys.executable else "python"
+    py = Path(sys.executable).as_posix() if " " not in sys.executable else "python"
     pyproject = read(root / "pyproject.toml")
     setup_cfg = read(root / "setup.cfg")
     reqs = " ".join(read(p) for p in root.glob("requirements*.txt")).lower() + pyproject.lower()
@@ -83,9 +97,22 @@ def detect(root: Path) -> dict[str, tuple[str | None, str]]:
             found["typecheck"] = ("mypy .", "mypy configured")
         elif (root / "pyrightconfig.json").exists() or "[tool.pyright" in pyproject:
             found["typecheck"] = ("pyright", "pyright configured")
-        if "[tool.pytest" in pyproject or (root / "pytest.ini").exists() or (root / "conftest.py").exists() \
-                or "pytest" in reqs or any((root / d).is_dir() for d in ("tests", "test")):
-            found["test"] = (f"{py} -m pytest -q", "pytest config or tests/ dir")
+
+    # --- Python tests: independent of config files; the runner is chosen by probing
+    pytest_cfg = "[tool.pytest" in pyproject or (root / "pytest.ini").exists() or (root / "conftest.py").exists() \
+        or "pytest" in reqs
+    test_dirs = [d for d in ("tests", "test") if (root / d).is_dir()]
+    test_files = [p for d in test_dirs for p in (root / d).rglob("test*.py")] + list(root.glob("test_*.py"))
+    if pytest_cfg or test_files:
+        ok, why = probe_pytest(root)
+        if ok:
+            found["test"] = (f"{py} -m pytest -q", f"pytest runnable: {why}")
+        elif any("unittest.TestCase" in read(p) for p in test_files):
+            d = next((d for d in test_dirs if list((root / d).rglob("test*.py"))), ".")
+            top = " -t ." if d != "." and (root / d / "__init__.py").exists() else ""
+            found["test"] = (f"{py} -m unittest discover -s {d}{top}", f"unittest TestCase found; {why}")
+        else:
+            found["test"] = (None, why)
 
     # --- JavaScript / TypeScript
     pkg_path = root / "package.json"
@@ -237,15 +264,15 @@ def main() -> int:
         print("--- TEST INTEGRITY (report these to the user; do not hide them)")
         print("\n".join("  " + t for t in tamper))
     if failed:
-        print("VERDICT: FAIL — fix the cause, re-run verify. Do not report the task as done.")
+        print("VERDICT: FAIL (exit 1) — fix the cause, re-run verify. Do not report the task as done.")
         return 1
     if ran == 0:
-        print("VERDICT: NOTHING VERIFIED — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
+        print("VERDICT: NOTHING VERIFIED (exit 2) — no gate ran. Tell the user; consider setting commands in .agentkit.json.")
         return 2
     if tamper:
-        print("VERDICT: PASS WITH TEST CHANGES — get the user's OK on the changes above before reporting done.")
+        print("VERDICT: PASS WITH TEST CHANGES (exit 2) — get the user's OK on the changes above before reporting done.")
         return 2
-    print("VERDICT: PASS")
+    print("VERDICT: PASS (exit 0)")
     return 0
 
 
