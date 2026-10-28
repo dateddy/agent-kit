@@ -252,10 +252,18 @@ SECRET_PATTERNS = [
         r"(?i)\b(api[_-]?key|secret|passw(or)?d|token|access[_-]?key)\b\s*[:=]\s*['\"][^'\"\s]{12,}['\"]")),
     ("connection string w/ password", re.compile(r"\b[a-z+]+://[^/\s:@]+:[^/\s@]{4,}@")),
 ]
-PLACEHOLDER = re.compile(r"(?i)(xxx|your[_-]|example|placeholder|changeme|dummy|<.*>|\$\{|os\.environ|getenv)")
+# Judged on the matched value only: a getenv()/os.environ call on the same line exempts nothing, since a key passed as
+# its default value is still committed.
+PLACEHOLDER = re.compile(r"(?i)(xxx|your[_-]|example|changeme|<[^>]*>|\$\{)")
 BAD_FILES = [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "*.p12", "*.pfx", "credentials.json",
              "service-account*.json", "*.sqlite", "*.db"]
 ALLOW_FILES = [".env.example", ".env.sample", ".env.template"]
+
+
+def secret_hits(text: str) -> list[tuple[str, str]]:
+    """(label, matched value) for every secret-pattern match whose value is not itself a placeholder."""
+    return [(label, mt.group(0)) for label, rx in SECRET_PATTERNS for mt in rx.finditer(text)
+            if not PLACEHOLDER.search(mt.group(0))]
 
 
 def cmd_scan(a, cfg):
@@ -279,19 +287,14 @@ def cmd_scan(a, cfg):
         if l.startswith("+++ b/"):
             cur = l[6:]
         elif l.startswith("+") and not l.startswith("+++") and cur and not kit_managed(cur):
-            for label, rx in SECRET_PATTERNS:
-                mt = rx.search(l)
-                if mt and not PLACEHOLDER.search(l):
-                    findings.append(f"{cur}: possible {label}: {mt.group(0)[:12]}…")
+            for label, value in secret_hits(l):
+                findings.append(f"{cur}: possible {label}: {value[:12]}…")
     if not a.staged:
         for p in [p for xy, p in status_entries() if xy == "??" and not kit_managed(p)]:
             fp = root / p
             if fp.is_file() and fp.stat().st_size < 1_000_000:
-                txt = fp.read_text(errors="ignore")
-                for label, rx in SECRET_PATTERNS:
-                    mt = rx.search(txt)
-                    if mt and not PLACEHOLDER.search(txt[max(0, mt.start() - 40):mt.end() + 40]):
-                        findings.append(f"{p}: possible {label}: {mt.group(0)[:12]}…")
+                for label, value in secret_hits(fp.read_text(errors="ignore")):
+                    findings.append(f"{p}: possible {label}: {value[:12]}…")
     for f in dict.fromkeys(findings):
         print("BLOCK:", f)
     if findings:

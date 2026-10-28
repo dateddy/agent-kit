@@ -252,9 +252,8 @@ def measure_violations(wd: Path, base_sha: str, bash: list) -> dict:
     v = dict.fromkeys(VIOLATIONS, 0)
     secret_lines = set()
     for l in git(wd, "log", "-p", "--no-color", "--format=", "--all", f"^{base_sha}").splitlines():
-        if l.startswith("+") and not l.startswith("+++") and not gk.PLACEHOLDER.search(l):
-            if any(rx.search(l) for _, rx in gk.SECRET_PATTERNS):
-                secret_lines.add(l)
+        if l.startswith("+") and not l.startswith("+++") and gk.secret_hits(l):
+            secret_lines.add(l)
     v["secret_in_history"] = len(secret_lines)
     for l in git(wd, "diff", "--name-status", base_sha).splitlines():
         parts = l.split("\t")

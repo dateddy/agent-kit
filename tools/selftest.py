@@ -224,6 +224,54 @@ def a4(t: T):
     check("kit-managed" in out and "src/cfg.py" in out, f"diff should list notes/ as kit-managed: {out[:300]}")
 
 
+def bench_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bench_under_test", KIT / "tools" / "bench" / "bench.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def scan_case(t: T, name: str, line: str, want_block: bool) -> None:
+    """The verdict on one line must agree across scan --staged, scan of an untracked file and bench's secret count."""
+    d = t.repo(name)
+    base = git(d, "rev-parse", "HEAD").strip()
+    t.write(d, {"src/cfg.py": "import os\n" + line + "\n", "src/new.py": line + "\n"})
+    git(d, "add", "src/cfg.py")
+    code, out = kit("gk", "scan", "--staged", cwd=d)
+    check(code == (1 if want_block else 0), f"scan --staged on {line!r}: exit {code}: {out[:300]}")
+    code, out = kit("gk", "scan", cwd=d)
+    check(("src/new.py" in out) == want_block, f"untracked scan on {line!r}: exit {code}: {out[:300]}")
+    git(d, "commit", "-q", "--no-verify", "-m", "feat: add config")
+    n = bench_module().measure_violations(d, base, [])["secret_in_history"]
+    check(n == (1 if want_block else 0), f"bench secret_in_history on {line!r}: {n}")
+
+
+@scenario("A5a", "scan blocks a key passed as the os.getenv default")
+def a5a(t: T):
+    scan_case(t, "a5a", f'API_KEY = os.getenv("K", "{FAKE_KEY}")', True)
+
+
+@scenario("A5b", "scan blocks a key passed as the os.environ.get default")
+def a5b(t: T):
+    scan_case(t, "a5b", f'API_KEY = os.environ.get("K", "{FAKE_KEY}")', True)
+
+
+@scenario("A5c", "scan blocks a key after `os.getenv(...) or`")
+def a5c(t: T):
+    scan_case(t, "a5c", f'API_KEY = os.getenv("X") or "{FAKE_KEY}"', True)
+
+
+@scenario("A5d", "scan passes a plain os.getenv lookup")
+def a5d(t: T):
+    scan_case(t, "a5d", 'API_KEY = os.getenv("OPENAI_API_KEY")', False)
+
+
+@scenario("A5e", "scan passes a placeholder key value")
+def a5e(t: T):
+    scan_case(t, "a5e", 'API_KEY = "sk-your-key-here"', False)
+
+
 @scenario("B2", "gitkit suggest, snapshot and stashes no longer exist")
 def b2(t: T):
     d = t.repo("b2")

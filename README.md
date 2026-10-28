@@ -335,7 +335,7 @@ The agent updates the task note at plan-step boundaries and before commits, not 
 |---|---|
 | `gk diff [--staged] [paths]` | Size-capped diff that skips lockfiles, notebooks, generated, binary and kit-managed files |
 | `gk lint-msg FILE` / `-m "…"` | Conventional Commit check: type, scope, imperative mood, length, no trailing period, blank line 2, BREAKING footer. Git-generated `Merge`, `Revert`, `fixup!`, `squash!` messages pass |
-| `gk scan --staged` | Blocks private keys, API tokens (OpenAI/Anthropic/HF/GitHub/AWS/Google/Slack), hard-coded passwords, `.env`/`.pem` files, files over 5 MB. Ignores kit-managed paths (`notes/`, `.agentkit/`, `.agentkit.json`, `experiments/runs.jsonl`, `prompts/runs/`) |
+| `gk scan --staged` | Blocks private keys, API tokens (OpenAI/Anthropic/HF/GitHub/AWS/Google/Slack), hard-coded passwords, `.env`/`.pem` files, files over 5 MB. Ignores kit-managed paths (`notes/`, `.agentkit/`, `.agentkit.json`, `experiments/runs.jsonl`, `prompts/runs/`). A match is exempt only when the matched value itself is a placeholder (`xxx`, `your_`, `example`, `changeme`, `<…>`, `${…}`); a key given as a `getenv`/`os.environ` default is blocked |
 | `gk branch-name feat "Thêm BM25 fallback" --ticket VMR-12` | → `feat/vmr-12-them-bm25-fallback` (Vietnamese diacritics stripped) |
 | `gk preflight commit\|switch\|merge X\|rebase X\|pull\|push\|stash-pop` | Safety check before the operation; predicts merge conflicts without touching the working tree |
 
