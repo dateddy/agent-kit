@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Self-test for agent-kit: builds throwaway git repos and runs the real scripts against them.
+
+  python tools/selftest.py                 run every scenario
+  python tools/selftest.py --cp1252        same, with PYTHONIOENCODING=cp1252 for every child
+                                           (simulates a Windows console)
+  python tools/selftest.py -k A1 B1a       only these scenario ids
+  python tools/selftest.py --keep          keep the temp dirs (printed on failure)
+
+Prints one table (PASS/FAIL · id · scenario); exits 1 if any scenario fails. Stdlib only.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import traceback
+from pathlib import Path
+
+KIT = Path(__file__).resolve().parent.parent
+SK = KIT / "skills"
+SCRIPTS = {
+    "pl": SK / "writing-plans/scripts/plan.py",
+    "nt": SK / "keeping-notes/scripts/notes.py",
+    "gk": SK / "managing-git/scripts/gitkit.py",
+    "vf": SK / "verifying-changes/scripts/verify.py",
+    "rm": SK / "economizing-context/scripts/repomap.py",
+    "run": SK / "economizing-context/scripts/run.py",
+    "dbg": SK / "debugging-systematically/scripts/dbg.py",
+    "pk": SK / "crafting-prompts/scripts/promptkit.py",
+    "validate": KIT / "tools/validate_skills.py",
+    "install": KIT / "tools/install.py",
+}
+VI = "Bộ dữ liệu FAQ mẫu + loader"
+
+CP1252 = False
+SCENARIOS: list[tuple[str, str, object]] = []
+
+
+def utf8_stdio() -> None:
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8", errors="replace")
+
+
+def scenario(sid: str, title: str):
+    def deco(fn):
+        SCENARIOS.append((sid, title, fn))
+        return fn
+    return deco
+
+
+class Fail(AssertionError):
+    pass
+
+
+def check(cond, msg: str) -> None:
+    if not cond:
+        raise Fail(msg)
+
+
+def rmtree(p: Path) -> None:
+    def onerr(fn, path, _exc):  # git objects are read-only on Windows
+        os.chmod(path, stat.S_IWRITE)
+        fn(path)
+    shutil.rmtree(p, onerror=onerr)
+
+
+def child_env(extra: dict | None = None, force_cp1252: bool = False) -> dict:
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    if CP1252 or force_cp1252:
+        env["PYTHONIOENCODING"] = "cp1252"
+    env.update(extra or {})
+    return env
+
+
+def run(cmd: list, cwd: Path, env: dict | None = None, force_cp1252: bool = False) -> tuple[int, str]:
+    p = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
+                       env=child_env(env, force_cp1252), timeout=300)
+    return p.returncode, p.stdout + p.stderr
+
+
+def kit(name: str, *args, cwd: Path, env: dict | None = None, force_cp1252: bool = False) -> tuple[int, str]:
+    return run([sys.executable, SCRIPTS[name], *args], cwd, env, force_cp1252)
+
+
+def git(cwd: Path, *args) -> str:
+    return run(["git", *args], cwd)[1]
+
+
+class T:
+    """Per-scenario scratch space."""
+
+    def __init__(self, base: Path):
+        self.base = base
+
+    def sub(self, name: str) -> Path:
+        d = self.base / name
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def repo(self, name: str = "repo", files: dict | None = None, commit: bool = True) -> Path:
+        d = self.sub(name)
+        git(d, "init", "-q", "-b", "main")
+        for k, v in (("user.name", "selftest"), ("user.email", "selftest@example.com"), ("core.autocrlf", "false")):
+            git(d, "config", k, v)
+        self.write(d, {"README.md": "# demo\n", **(files or {})})
+        if commit:
+            self.commit(d)
+        return d
+
+    @staticmethod
+    def write(root: Path, files: dict) -> None:
+        for rel, text in files.items():
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text, encoding="utf-8", newline="\n")
+
+    @staticmethod
+    def commit(d: Path, msg: str = "chore: snapshot") -> None:
+        git(d, "add", "-A")
+        git(d, "commit", "-q", "-m", msg)
+
+
+UT_TEST = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1, 1)\n"
+
+PLAN_VI = f"""# Plan: {VI}
+Constraints: không đổi API
+Done when: `a.py` exits 0
+Out of scope: web
+
+## 1. {VI}
+Files: a.py (new)
+Do: tạo a.py với hàm load()
+Verify: python a.py
+Done: exit 0
+"""
+
+
+# ================================================================ A scenarios
+@scenario("A1", "Vietnamese text through plan.py / notes.py under cp1252")
+def a1(t: T):
+    d = t.repo()
+    t.write(d, {"plan.md": PLAN_VI})
+    code, out = kit("pl", "check", "plan.md", cwd=d, force_cp1252=True)
+    check(code == 0 and "UnicodeEncodeError" not in out, f"plan check exit {code}: {out[:200]}")
+    check(VI[:12] in out, f"Vietnamese goal not echoed: {out[:200]}")
+    kit("nt", "init", cwd=d, force_cp1252=True)
+    code, out = kit("nt", "task", "--goal", VI, cwd=d, force_cp1252=True)
+    check(code == 0, f"notes task exit {code}: {out[:200]}")
+    code, out = kit("nt", "brief", cwd=d, force_cp1252=True)
+    check(code == 0 and "UnicodeEncodeError" not in out, f"brief exit {code}: {out[:200]}")
+    check(VI in out and "�" not in out, f"brief output garbled: {out[:200]}")
+
+
+@scenario("A1v", "validate_skills flags a script without UTF-8 reconfigure")
+def a1v(t: T):
+    sk = t.sub("skills") / "fake"
+    t.write(sk, {
+        "SKILL.md": "---\nname: fake\ndescription: Does a thing. Use when testing the validator.\n---\n\n# Fake\n",
+        "scripts/x.py": "import sys\n\n\ndef main():\n    print('hi')\n\n\nif __name__ == '__main__':\n    sys.exit(main())\n",
+    })
+    code, out = kit("validate", str(sk.parent), cwd=t.base)
+    check(code == 1 and "lacks UTF-8" in out, f"expected FAIL with 'lacks UTF-8', got exit {code}: {out[:300]}")
+
+
+@scenario("A2", "plan.py apply echoes Vietnamese step titles intact (child output decoding)")
+def a2(t: T):
+    d = t.repo()
+    t.write(d, {"plan.md": PLAN_VI})
+    kit("nt", "init", cwd=d)
+    code, out = kit("pl", "apply", "plan.md", cwd=d, force_cp1252=True)
+    check(code == 0, f"apply exit {code}: {out[:300]}")
+    check(f"step 1: {VI}" in out, f"title garbled or missing: {out[:300]}")
+
+
+@scenario("A3a", "unittest-only repo with no config files: test gate runs and passes")
+def a3a(t: T):
+    d = t.repo(files={"tests/test_x.py": UT_TEST})
+    code, out = kit("vf", cwd=d)
+    check(code == 0, f"exit {code}: {out[:400]}")
+    check("test       PASS" in out and "VERDICT: PASS (exit 0)" in out, f"no passing test gate: {out[:400]}")
+
+
+@scenario("A3b", "broken pytest falls back to unittest")
+def a3b(t: T):
+    fake = t.sub("fakepkgs") / "pytest"
+    t.write(fake, {"__init__.py": "", "__main__.py": "raise ImportError('No module named coverage')\n"})
+    d = t.repo(files={"tests/test_x.py": UT_TEST})
+    env = {"PYTHONPATH": str(fake.parent) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    code, out = kit("vf", "--detect", cwd=d, env=env)
+    check("unittest" in out and "pytest not runnable" in out, f"--detect does not explain: {out[:400]}")
+    code, out = kit("vf", cwd=d, env=env)
+    check(code == 0 and "test       PASS" in out, f"exit {code}: {out[:400]}")
+
+
+@scenario("A3c", "no tests at all: NOTHING VERIFIED (exit 2)")
+def a3c(t: T):
+    d = t.repo()
+    code, out = kit("vf", cwd=d)
+    check(code == 2 and "NOTHING VERIFIED (exit 2)" in out, f"exit {code}: {out[:300]}")
+
+
+def staged(t: T, files: dict, name: str) -> tuple[int, str]:
+    d = t.repo(name)
+    t.write(d, files)
+    git(d, "add", "-A")
+    return kit("gk", "suggest", "--staged", cwd=d)
+
+
+@scenario("A4a", "gitkit suggest: source + its test is one concern")
+def a4a(t: T):
+    code, out = staged(t, {"faq/data.py": "x = 1\n", "tests/test_data.py": UT_TEST}, "a")
+    check(code == 0, f"exit {code}: {out[:300]}")
+
+
+@scenario("A4b", "gitkit suggest: source + test + README + requirements warns")
+def a4b(t: T):
+    code, out = staged(t, {"faq/data.py": "x = 1\n", "tests/test_data.py": UT_TEST,
+                           "README.md": "# demo\nmore\n", "requirements.txt": "requests\n"}, "b")
+    check(code == 2 and "WARN" in out, f"exit {code}: {out[:300]}")
+
+
+@scenario("A4c", "gitkit suggest: notes/decisions.md is ignored for categorising")
+def a4c(t: T):
+    code, out = staged(t, {"notes/decisions.md": "# Decisions\n", "faq/data.py": "x = 1\n"}, "c")
+    check(code == 0, f"exit {code}: {out[:300]}")
+
+
+# ================================================================ runner
+def main() -> int:
+    global CP1252
+    utf8_stdio()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cp1252", action="store_true")
+    ap.add_argument("-k", nargs="+", metavar="ID")
+    ap.add_argument("--keep", action="store_true")
+    a = ap.parse_args()
+    CP1252 = a.cp1252
+    wanted = set(a.k or [])
+    todo = [s for s in SCENARIOS if not wanted or s[0] in wanted]
+    if wanted and not todo:
+        print(f"no scenario matches {sorted(wanted)}")
+        return 1
+
+    root = Path(tempfile.mkdtemp(prefix="agentkit-selftest-"))
+    rows, failed = [], 0
+    for sid, title, fn in todo:
+        t = T(root / sid)
+        t.base.mkdir(parents=True)
+        try:
+            fn(t)
+            rows.append(f"PASS · {sid:4} · {title}")
+        except Exception as e:  # noqa: BLE001 - a scenario must never take the runner down
+            failed += 1
+            detail = str(e) if isinstance(e, Fail) else traceback.format_exc(limit=3)
+            rows.append(f"FAIL · {sid:4} · {title}")
+            rows += ["        " + l for l in detail.strip().splitlines()[:6]]
+    print("\n".join(rows))
+    print(f"\n{len(todo) - failed}/{len(todo)} passed" + (" (cp1252 console)" if CP1252 else ""))
+    if a.keep or failed:
+        print(f"temp dirs kept: {root}")
+    else:
+        rmtree(root)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
