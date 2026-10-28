@@ -8,7 +8,7 @@
 Project install does:
   <repo>/.agentkit/skills/<skill>   canonical copy, agent-neutral (referenced by AGENTS.md)
   <repo>/.claude/skills/<skill>     symlink to the above (copy if symlinks are unavailable)
-  <repo>/AGENTS.md, CLAUDE.md, .agentkit.json, .claude/commands/task.md   created only if missing
+  <repo>/AGENTS.md, CLAUDE.md, .agentkit.json, .claude/commands/*.md   created only if missing (task, grill)
   notes/ layout + .gitignore rule   via notes.py init
 """
 from __future__ import annotations
@@ -87,7 +87,7 @@ def main() -> int:
     for name, src in (("AGENTS.md", KIT / "templates" / "AGENTS.md"),
                       ("CLAUDE.md", KIT / "templates" / "CLAUDE.md"),
                       (".agentkit.json", KIT / ".agentkit.example.json"),
-                      (".claude/commands/task.md", KIT / "templates" / "commands" / "task.md")):
+                      *((f".claude/commands/{c.name}", c) for c in sorted((KIT / "templates" / "commands").glob("*.md")))):
         dst = repo / name
         if not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)

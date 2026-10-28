@@ -327,6 +327,61 @@ def b2b(t: T):
           f"exit {code}: {out[:400]}")
 
 
+# ================================================================ B3 decisions in plans, /grill
+def plan_with(decisions: str) -> str:
+    return ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n"
+            f"Decisions: {decisions}\n\n## 1. Add a\nFiles: a.py (new)\nDo: create a.py\n"
+            "Verify: python a.py\nDone: exit 0\n")
+
+
+def decided_repo(t: T, supersede: bool = False) -> Path:
+    d = t.repo()
+    kit("nt", "init", cwd=d)
+    code, out = kit("nt", "decide", "--topic", "storage", "--text", "Use JSON files", "--why", "small data", cwd=d)
+    check(code == 0 and "D-001" in out, f"decide: {out[:200]}")
+    if supersede:
+        code, out = kit("nt", "decide", "--topic", "storage", "--text", "Use SQLite", "--why", "grew",
+                        "--supersedes", "D-001", cwd=d)
+        check(code == 0 and "D-002" in out, f"supersede: {out[:200]}")
+    return d
+
+
+@scenario("B3a", "plan check: an existing Decisions id passes")
+def b3a(t: T):
+    d = decided_repo(t)
+    t.write(d, {"plan.md": plan_with("D-001")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 0, f"exit {code}: {out[:300]}")
+
+
+@scenario("B3b", "plan check: a missing Decisions id BLOCKs")
+def b3b(t: T):
+    d = decided_repo(t)
+    t.write(d, {"plan.md": plan_with("D-001, D-099")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 1 and "D-099" in out, f"exit {code}: {out[:300]}")
+
+
+@scenario("B3c", "plan check: a superseded Decisions id WARNs and names the replacement")
+def b3c(t: T):
+    d = decided_repo(t, supersede=True)
+    t.write(d, {"plan.md": plan_with("D-001")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 2 and "D-002" in out, f"exit {code}: {out[:300]}")
+
+
+@scenario("B3d", "install copies the grilling-designs skill and /grill command")
+def b3d(t: T):
+    d = t.repo()
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"install exit {code}: {out[:300]}")
+    check((d / ".agentkit/skills/grilling-designs/SKILL.md").is_file(), "skill not installed")
+    check((d / ".claude/commands/grill.md").is_file() and (d / ".claude/commands/task.md").is_file(),
+          "commands not installed")
+    text = (d / ".agentkit/skills/grilling-designs/SKILL.md").read_text(encoding="utf-8")
+    check("disable-model-invocation: true" in text, "frontmatter lost")
+
+
 # ================================================================ runner
 def main() -> int:
     global CP1252

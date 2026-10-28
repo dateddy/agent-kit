@@ -25,7 +25,8 @@ Out of scope:  <deferred>
 
    Bad: "Which search method, and CLI or web?" Good: "1. Search method? Recommended: BM25 — reply 'ok'. 2. Interface? Recommended: CLI — reply 'ok'."
    If the user answers "skip", leave the field empty.
-4. If not in plan mode, suggest it: plan mode with the planning model, execution with a cheaper one (Claude Code: `/model opusplan`, `Shift+Tab`).
-5. Follow writing-plans to produce the plan from the frame. Put the frame's fields in the plan header.
+4. Suggest `/grill` (grilling-designs) — **do not auto-run it** — when the task adds or changes a public interface or schema, touches 3 or more modules (`rm --zone`), or the user's answers left a design choice open. One line: "This has open design choices — run `/grill` first?" If the user declines, continue.
+5. If not in plan mode, suggest it: plan mode with the planning model, execution with a cheaper one (Claude Code: `/model opusplan`, `Shift+Tab`).
+6. Follow writing-plans to produce the plan from the frame. Put the frame's fields in the plan header.
 
 Do not create a branch, edit files or write notes before the plan is accepted.

@@ -19,6 +19,7 @@ Path: `python <this-skill>/scripts/plan.py` (`pl`). Exit codes: 0 OK · 2 WARN �
 Constraints: <must not change / required tech>
 Done when: <observable result for the whole task>
 Out of scope: <deferred>
+Decisions: D-012, D-013        (optional: ids from a /grill session or nt decide)
 
 ## 1. <step title>
 Files: src/x.py, tests/test_x.py (new)
@@ -26,6 +27,8 @@ Do: <exact change: function names, signatures, behavior, edge cases>
 Verify: python -m pytest tests/test_x.py -q
 Done: <observable: value returned, test name passing, endpoint status>
 ```
+
+`Decisions:` lists decision ids the plan relies on. `pl check` BLOCKs an id missing from `notes/decisions.md` and WARNs on a superseded one (it names the replacement). Do not re-ask the user about a listed decision.
 
 Step rules: 2–8 steps; each step leaves the code working and verifiable; tests in the same step as the behavior they cover; real paths only (`(new)` for files to create); `Done` is observable, never "works correctly".
 
