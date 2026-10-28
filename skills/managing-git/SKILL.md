@@ -25,7 +25,8 @@ Run `python <this-skill>/scripts/gitkit.py <cmd>` (below: `gk`). Config: `.agent
 - Code + its tests + its doc line = one commit. Never split them and never ask about it.
 - Subject says *what*, imperative; body (non-trivial changes) says *why* and side effects, not a file list. [Examples](reference/commit-examples.md).
 - Installed git hooks run `scan --staged` and `lint-msg` on `git commit`. Never pass `--no-verify`; fix a hook BLOCK.
-- Amend only the last **unpushed** commit (`git commit --amend`), and only if the user asked.
+- `git commit --amend` only on **your own latest, unpushed** commit (`git branch -r --contains HEAD` prints nothing),
+  and say in your reply that you amended it. Never amend a commit you did not make in this task, or a pushed one.
 
 ## Branch
 
