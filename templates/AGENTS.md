@@ -14,10 +14,13 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 1. Start of session: `nt brief`. Trust it over re-exploring; read only what it points to.
 2. Non-trivial task → plan first (writing-plans). ≤2 files and no design decision → lite path: no plan file.<!--if:grilling-designs--> New public interface/schema, ≥3 modules or an open design choice → suggest `/grill` (grilling-designs) first; never auto-run it.<!--/if--> After the plan is accepted: branch (`gk branch-name`), save plan, `pl check`, `pl apply`.
 3. Per step: `pl step N` → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit (managing-git). Before editing a module: `rmap --zone <file>`. Inner loop: `vf --affected`; the full `vf` is still required before commit.
-4. Done only when `vf` exits 0 after the last edit (never pipe it; the VERDICT line is authoritative). Never weaken tests to pass.
+4. Done only when `vf` exits 0 after the last edit (never pipe it; the VERDICT line is authoritative). If the guards are installed (`install.py --guards`), their `verify.sh` must exit 0 too. Never weaken tests to pass.
 5. Decision settled by the user → `nt decide --topic … --text … --why …`.
 <!--if:tracking-experiments-->6. Training/eval runs → `ex run … -- <cmd>`, never bare.<!--/if-->
 <!--if:debugging-systematically-->7. Something fails → debugging-systematically: `dbg open --layer code|data|llm …`, no guess-and-edit.<!--/if-->
+
+## Failure log
+- Every mistake of yours that the user corrects gets an entry in `FAILURES.md` (date, what happened, root cause, control). The entry must name a control; prefer a script or hook that always runs over a new instruction line.
 
 ## Scripts decide, you write
 - Exit codes: 0 OK · 2 WARN → show the user and wait for yes · 1 BLOCK → fix and re-run. Never bypass a BLOCK.

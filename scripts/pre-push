@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# pre-push - git pre-push hook: protected branches take merge commits only, then run verify.sh.
+#
+# Exit-code convention: git hook. Any non-zero exit rejects the push (0 allows it). Needs no agent.
+# git calls it with `<remote name> <url>` and feeds one line per pushed ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# 1. For every pushed branch that matches git.protected_branches (and guards.require_merge_commits is on),
+#    each commit on the first-parent line of the pushed range must be a merge commit (>= 2 parents).
+#    A fast-forwarded feature branch puts non-merge commits on that line, so it is refused.
+#    range = <remote sha>..<local sha>; for a new branch (remote sha all zeros), or a remote sha this clone
+#    does not have: every commit of <local sha> that no remote-tracking ref of this remote contains.
+#    The very first push to a remote with no branches at all is let through (nothing to merge into).
+# 2. Then verify.sh runs once (guards.verify_on_push, default on); its failure rejects the push.
+# Deleting a branch or pushing a tag is not judged by (1).
+set -u
+AK_FAIL=1
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib.sh
+. "$HERE/lib.sh"
+
+REMOTE=${1:-origin}
+is_zero() { case $1 in '' | *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+# first_parent_range <local sha> <remote sha>: commits on the pushed first-parent line, newest first
+first_parent_range() {
+  if is_zero "$2" || ! git cat-file -e "$2^{commit}" 2>/dev/null; then
+    git rev-list --first-parent "$1" --not --remotes="$REMOTE"
+  else
+    git rev-list --first-parent "$2..$1"
+  fi
+}
+
+bad=0 pushed=0
+while read -r lref lsha rref rsha; do
+  [ -n "${lsha:-}" ] || continue
+  is_zero "$lsha" && continue  # deleting a ref
+  pushed=1
+  case $rref in refs/heads/*) ;; *) continue ;; esac
+  name=${rref#refs/heads/}
+  is_protected "$name" || continue
+  cfg_on guards.require_merge_commits true || continue
+  if is_zero "$rsha" && [ -z "$(git for-each-ref "refs/remotes/$REMOTE/")" ]; then
+    echo "pre-push: '$REMOTE' has no branches yet; first push of '$name' is not checked for merge commits" >&2
+    continue
+  fi
+  offenders=""
+  n=0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    # `rev-list --parents -n 1` prints "<commit> <parent>..."; fewer than 3 words means < 2 parents
+    set -- $(git rev-list --parents -n 1 "$c")
+    [ $# -ge 3 ] && continue
+    n=$((n + 1))
+    [ "$n" -le 5 ] && offenders="$offenders
+  $(git log -1 --oneline "$c")"
+  done < <(first_parent_range "$lsha" "$rsha")
+  if [ "$n" -gt 0 ]; then
+    bad=1
+    {
+      echo "BLOCK: push to protected branch '$name' has $n non-merge commit(s) on its first-parent line:$offenders"
+      echo "Merge the task branch with: git merge --no-ff <branch>, then push again."
+      conv=$(cfg guards.merge_convention "")
+      [ -z "$conv" ] || echo "Convention: $conv"
+      echo "Inspect the convention first: git log --first-parent --merges -5 $name --oneline"
+    } >&2
+  fi
+done
+
+[ "$bad" -eq 0 ] || exit 1
+if [ "$pushed" -eq 1 ] && cfg_on guards.verify_on_push true; then
+  bash "$HERE/verify.sh" || { echo "BLOCK: verify.sh failed; fix it, or set guards.verify_on_push to false in .agentkit.json" >&2; exit 1; }
+fi
+exit 0

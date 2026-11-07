@@ -1,0 +1,22 @@
+{
+  "_comment": "Claude Code hooks installed by install.py --guards. Thin wrappers: all logic is in .agentkit/scripts/ and also works without Claude Code. Keys starting with _ are dropped on install.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.agentkit/scripts/guard-git.sh\""}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.agentkit/scripts/ruff-fix.sh\""}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.agentkit/scripts/verify.sh\" --hook"}]
+      }
+    ]
+  }
+}

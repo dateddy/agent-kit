@@ -15,6 +15,11 @@
                                                         git hooks; any agent is gated, honours core.hooksPath. An existing
                                                         hook is kept; a marked block is inserted after its shebang.
   python tools/install.py <repo> --uninstall-git-hooks  remove only the marked blocks again
+  python tools/install.py <repo> --guards [--team]      computational guards (bash + git + jq): copies scripts/ to
+                                                        .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git,
+                                                        PostToolUse ruff-fix, Stop verify) into .claude/settings.local.json
+                                                        (--team: .claude/settings.json), adds a pre-push git hook block, and
+                                                        offers `git config merge.ff false` after printing its effect
 
 Project install does:
   <repo>/.agentkit/skills/<skill>   canonical copy, agent-neutral (referenced by AGENTS.md)
@@ -40,6 +45,8 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
+GUARD_SCRIPTS = ("lib.sh", "guard-git.sh", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
+GUARD_IGNORE = (".agentkit/coverage.xml", ".coverage")  # written by verify.sh
 ALL_SKILLS = {p.name: p for p in sorted((KIT / "skills").iterdir()) if (p / "SKILL.md").exists()}
 CORE = ("writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context")
 OPTIONAL = {"experiments": "tracking-experiments", "prompts": "crafting-prompts",
@@ -187,7 +194,7 @@ def union_paths(repo: Path) -> list[str]:
         cfg = {}
     notes = (cfg.get("notes") or {}).get("dir", "notes").strip("/")
     exp = (cfg.get("experiments") or {}).get("dir", "experiments").strip("/")
-    return [f"{notes}/decisions.md", f"{notes}/debug.jsonl", f"{exp}/runs.jsonl"]
+    return [f"{notes}/decisions.md", f"{notes}/debug.jsonl", f"{exp}/runs.jsonl", "FAILURES.md"]
 
 
 def merge_gitattributes(repo: Path) -> str:
@@ -229,8 +236,28 @@ def hooks_dir(repo: Path) -> Path | None:
     return Path(d) if Path(d).is_absolute() else repo / d
 
 
-def install_git_hook(d: Path, name: str) -> tuple[str, int]:
-    path, block = d / name, hook_block(name)
+def prepush_block() -> str:
+    """pre-push block: hands git's ref lines to .agentkit/scripts/pre-push, then restores stdin for any hook after it."""
+    return "\n".join([
+        HOOK_BEGIN,
+        "ak_in=$(mktemp)",
+        'cat >"$ak_in"',
+        'ak_pp="$(git rev-parse --show-toplevel)/.agentkit/scripts/pre-push"',
+        "ak_rc=0",
+        'if [ -f "$ak_pp" ]; then',
+        '  if command -v bash >/dev/null 2>&1; then bash "$ak_pp" "$@" <"$ak_in" || ak_rc=$?',
+        '  else echo "agent-kit: bash not found - pre-push checks SKIPPED" >&2; fi',
+        "fi",
+        'if [ "$ak_rc" -ne 0 ]; then rm -f "$ak_in"; exit "$ak_rc"; fi',
+        'exec <"$ak_in"',
+        'rm -f "$ak_in" 2>/dev/null',
+        HOOK_END,
+        "",
+    ])
+
+
+def install_git_hook(d: Path, name: str, block: str | None = None, manual: str | None = None) -> tuple[str, int]:
+    path, block = d / name, block or hook_block(name)
     if not path.exists():
         d.mkdir(parents=True, exist_ok=True)
         write_raw(path, "#!/bin/sh\n" + block)
@@ -243,7 +270,7 @@ def install_git_hook(d: Path, name: str) -> tuple[str, int]:
         if first.startswith("#!"):
             if not SH_SHEBANG.match(first):
                 return (f"WARN {path} is not a sh hook ({first.strip()}) — left untouched; "
-                        f"call gitkit.py {HOOK_CALLS[name]} from it by hand"), 2
+                        f"call {manual or 'gitkit.py ' + HOOK_CALLS[name]} from it by hand"), 2
             write_raw(path, first + "\n" + block + rest)
         else:
             write_raw(path, block + text)
@@ -266,17 +293,137 @@ def uninstall_git_hook(d: Path, name: str) -> tuple[str, int]:
     return f"unhook {path} (agent-kit block removed)", 0
 
 
-def git_hooks(repo: Path, action) -> int:
+def git_hooks(repo: Path, action, names: tuple = tuple(HOOK_CALLS)) -> int:
     d = hooks_dir(repo)
     if d is None:
         print(f"WARN {repo} is not the top level of a git repository — run `git init` there first; hooks not touched")
         return 2
     code = 0
-    for name in HOOK_CALLS:
+    for name in names:
         msg, c = action(d, name)
         print(msg)
         code = max(code, c)
     return code
+
+
+# ---------------------------------------------------------------- guards (bash scripts + Claude Code wiring)
+MERGE_FF_NOTE = (
+    "merge.ff: `git config merge.ff false` changes this clone's .git/config only (nothing is committed), but it affects\n"
+    "  everyone who uses this clone: `git merge` and `git pull` then create a merge commit instead of fast-forwarding, on\n"
+    "  every branch (including `git pull` on a feature branch). `git merge --ff-only` still works when asked for.")
+
+
+def git_out(repo: Path, *args: str) -> str | None:
+    p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=CHILD_ENV)
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def copy_guard_scripts(repo: Path) -> str:
+    dst = repo / ".agentkit" / "scripts"
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in GUARD_SCRIPTS:
+        data = (KIT / "scripts" / name).read_bytes().replace(b"\r\n", b"\n")  # bash chokes on CR
+        (dst / name).write_bytes(data)
+        (dst / name).chmod((dst / name).stat().st_mode | 0o111)
+    return f"copy {dst} ({len(GUARD_SCRIPTS)} scripts; needs bash, git, jq)"
+
+
+def merge_settings(path: Path, wanted: dict) -> tuple[str, int]:
+    """Add the wanted hook groups (event -> [group]) to a Claude Code settings file; nothing existing is touched."""
+    manual = "copy the hooks from templates/claude-hooks.json into it by hand"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError as e:
+        return f"WARN {path} is not valid JSON ({e}) — left untouched; {manual}", 2
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else None
+    if not isinstance(hooks, dict) or any(not isinstance(hooks.get(ev, []), list) for ev in wanted):
+        return f"WARN {path} has an unexpected layout — left untouched; {manual}", 2
+    hooks = data.setdefault("hooks", {})
+    added = []
+    for event, groups in wanted.items():
+        cur = hooks.setdefault(event, [])
+        have = {h.get("command") for g in cur if isinstance(g, dict)
+                for h in g.get("hooks", []) if isinstance(h, dict)}
+        for g in groups:
+            if not all(h["command"] in have for h in g["hooks"]):
+                cur.append(g)
+                added.append(event)
+    if not added:
+        return f"keep {path} (guard hooks already present)", 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    return f"hook {path} ({', '.join(added)} -> .agentkit/scripts)", 0
+
+
+def append_lines(path: Path, lines: tuple | list) -> list:
+    """Append the lines that are not in the file yet; returns the ones added."""
+    text = read_raw(path) if path.exists() else ""
+    have = {l.strip() for l in text.splitlines()}
+    add = [l for l in lines if l not in have]
+    if add:
+        nl = "\r\n" if "\r\n" in text else "\n"
+        write_raw(path, text + ("" if not text or text.endswith("\n") else nl) + nl.join(add) + nl)
+    return add
+
+
+def set_merge_ff(repo: Path, ask=None) -> tuple[str, int]:
+    """Print what `merge.ff false` changes and set it only on an explicit yes (never when not interactive)."""
+    if git_out(repo, "config", "--local", "--get", "merge.ff") == "false":
+        return "keep merge.ff=false (already set)", 0
+    print(MERGE_FF_NOTE)
+    not_interactive = f"skip merge.ff (not interactive). To apply: git -C {repo} config merge.ff false"
+    if ask is None:
+        if not sys.stdin.isatty():
+            return not_interactive, 0
+        ask = lambda: input("Set merge.ff=false in this clone? [y/N] ")  # noqa: E731
+    try:
+        answer = ask().strip().lower()
+    except EOFError:  # isatty() is True for the NUL device on Windows, so a closed stdin shows up here
+        print()
+        return not_interactive, 0
+    if answer not in ("y", "yes"):
+        return f"skip merge.ff (declined). To apply later: git -C {repo} config merge.ff false", 0
+    if git_out(repo, "config", "--local", "merge.ff", "false") is None:
+        return "WARN could not set merge.ff — run: git config merge.ff false", 2
+    return "set merge.ff=false in .git/config", 0
+
+
+def install_guards(repo: Path, team: bool, ask=None) -> int:
+    code = 0
+    print(copy_guard_scripts(repo))
+    wanted = json.loads((KIT / "templates" / "claude-hooks.json").read_text(encoding="utf-8"))["hooks"]
+    settings = repo / ".claude" / ("settings.json" if team else "settings.local.json")
+    msg, c = merge_settings(settings, wanted)
+    print(msg)
+    code = max(code, c)
+    if not team:  # personal trial: keep the file out of git without touching the shared .gitignore
+        excl = git_out(repo, "rev-parse", "--git-path", "info/exclude")
+        if excl:
+            path = Path(excl) if Path(excl).is_absolute() else repo / excl
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if append_lines(path, [".claude/settings.local.json"]):
+                print(f"exclude .claude/settings.local.json in {path} (personal, not committed)")
+    if append_lines(repo / ".gitignore", GUARD_IGNORE):
+        print(f"update {repo / '.gitignore'} ({', '.join(GUARD_IGNORE)})")
+    d = hooks_dir(repo)
+    if d is None:
+        print(f"WARN {repo} is not the top level of a git repository — pre-push hook and merge.ff not set up")
+        return max(code, 2)
+    msg, c = install_git_hook(d, "pre-push", prepush_block(), 'bash .agentkit/scripts/pre-push "$@"')
+    print(msg)
+    code = max(code, c)
+    msg, c = set_merge_ff(repo, ask)
+    print(msg)
+    if not (repo / ".agentkit.json").exists() or "guards" not in (repo / ".agentkit.json").read_text(encoding="utf-8"):
+        print("note: .agentkit.json has no \"guards\" section, so every default applies (see .agentkit.example.json)")
+    return max(code, c)
+
+
+def failures_header() -> str:
+    """FAILURES.md without the kit's own entries: the heading and the entry format."""
+    text = (KIT / "FAILURES.md").read_text(encoding="utf-8")
+    return text.partition("\n## 20")[0].rstrip() + "\n"
 
 
 def utf8_stdio() -> None:
@@ -296,10 +443,17 @@ def main() -> int:
                     help="optional skills, comma separated: " + ", ".join(f"{k} ({v})" for k, v in OPTIONAL.items()))
     ap.add_argument("--git-hooks", action="store_true", help="install pre-commit (scan) and commit-msg (lint-msg) git hooks")
     ap.add_argument("--uninstall-git-hooks", action="store_true", help="remove only the agent-kit blocks from git hooks")
+    ap.add_argument("--guards", action="store_true",
+                    help="install the computational guards: scripts, Claude Code hooks, pre-push (needs bash, git, jq)")
+    ap.add_argument("--team", action="store_true",
+                    help="with --guards: write the Claude Code hooks to .claude/settings.json (shared) instead of "
+                         "the uncommitted .claude/settings.local.json")
     a = ap.parse_args()
 
-    if a.user and (a.git_hooks or a.uninstall_git_hooks):
-        ap.error("git hooks belong to a repo; give a repo path instead of --user")
+    if a.user and (a.git_hooks or a.uninstall_git_hooks or a.guards):
+        ap.error("git hooks and guards belong to a repo; give a repo path instead of --user")
+    if a.team and not a.guards:
+        ap.error("--team only applies to --guards")
     extra = parse_with(a.with_)
     if extra is None:
         return 1
@@ -325,7 +479,7 @@ def main() -> int:
     if not repo.is_dir():
         sys.exit(f"not a directory: {repo}")
     if a.uninstall_git_hooks:
-        return git_hooks(repo, uninstall_git_hook)
+        return git_hooks(repo, uninstall_git_hook, (*HOOK_CALLS, "pre-push"))
 
     canon = repo / ".agentkit" / "skills"
     canon.mkdir(parents=True, exist_ok=True)
@@ -376,14 +530,19 @@ def main() -> int:
                        cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", env=CHILD_ENV)
     print(r.stdout.strip() or r.stderr.strip())
     print(merge_gitattributes(repo))
+    if not (repo / "FAILURES.md").exists():  # AGENTS.md asks for an entry per corrected mistake
+        write_raw(repo / "FAILURES.md", failures_header())
+        print(f"create {repo / 'FAILURES.md'}")
     code = 0
     if a.hooks:
         msg, code = merge_hook(repo)
         print(msg)
     if a.git_hooks:
         code = max(code, git_hooks(repo, install_git_hook))
+    if a.guards:
+        code = max(code, install_guards(repo, a.team))
     print("\nDone. Commit .agentkit/skills, .claude/, AGENTS.md, CLAUDE.md, .agentkit.json, .gitattributes, "
-          "notes/decisions.md.")
+          "notes/decisions.md, FAILURES.md" + (", .agentkit/scripts." if a.guards else "."))
     return code
 
 

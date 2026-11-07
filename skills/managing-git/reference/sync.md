@@ -11,6 +11,7 @@
 ## Merge / rebase / pull / push
 
 1. `git fetch --prune`
+1b. Merging into a protected branch: `git log --first-parent --merges -5 <target> --oneline`, then follow that convention (`--no-ff`, same message pattern). Mandatory, before `preflight`.
 2. `gk preflight merge <target>` (or `rebase`, `pull`, `push`). Read the predicted conflicts.
 3. Default strategy: merge the base into the feature branch; rebase only unpushed local branches. Ask the user if unsure.
 4. Conflicts → follow `reference/conflicts.md`.

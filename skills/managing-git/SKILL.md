@@ -34,6 +34,13 @@ Run `python <this-skill>/scripts/gitkit.py <cmd>` (below: `gk`). Config: `.agent
 One task = one branch (task notes are keyed by branch name). `gk branch-name <type> <short description> [--ticket ABC-12]`
 → `git switch -c <name>` from the intended base (ask if unclear). Uncommitted work moves with `switch -c`; no stash needed.
 
+## Merge into a protected branch: inspect the convention first (mandatory)
+
+Before any `git merge` whose target is `main` or another protected branch, run
+`git log --first-parent --merges -5 <target> --oneline` and do what it shows: same `--no-ff` merge commit, same message pattern.
+No merge commits in the output → ask the user. Never `--ff-only` or `--squash` into a protected branch.
+If the guards are installed, `guard-git.sh` blocks the command and the `pre-push` hook rejects the push anyway; do not look for a way around them.
+
 ## Stash, merge, rebase, pull, push
 
 `gk preflight <op>` first (`stash-pop`, `merge <target>`, `rebase`, `pull`, `push`) and read the predicted conflicts.
