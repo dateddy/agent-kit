@@ -57,6 +57,7 @@ agent-kit/
 ├── .github/workflows/         selftest.yml: 3 OSes x Python 3.9/3.13
 ├── .agentkit.example.json     default configuration
 ├── FAILURES.md                log of corrected agent mistakes and the control that now prevents each
+├── BACKLOG.md                 planned work for the next release (v0.4)
 └── VERSION                    0.3.1
 ```
 
