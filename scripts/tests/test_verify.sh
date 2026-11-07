@@ -120,7 +120,7 @@ t_uncommitted_and_untracked_count() {
 
 t_plan_directory_and_glob_entries() {
   setup; make_plan
-  sed -i 's#^- Files: src/a.py, tests/test_a.py (new)#- Files: src/pkg/, docs/*.md#' notes/tasks/feat--x.plan.md
+  sed 's#^- Files: src/a.py, tests/test_a.py (new)#- Files: src/pkg/, docs/*.md#' notes/tasks/feat--x.plan.md >p.tmp && mv p.tmp notes/tasks/feat--x.plan.md
   change src/pkg/deep/mod.py
   change docs/guide.md
   run bash "$V"

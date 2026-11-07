@@ -106,7 +106,7 @@ y.py" "$OUT" "old plan files"
 
 t_crlf_plan() {
   make_plan
-  sed -i 's/$/\r/' notes/tasks/feat--x.plan.md
+  awk '{ printf "%s\r\n", $0 }' notes/tasks/feat--x.plan.md >p.tmp && mv p.tmp notes/tasks/feat--x.plan.md
   run bash "$PS" mode
   assert_eq solo "$OUT" "CR stripped"
 }
