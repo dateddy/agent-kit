@@ -61,6 +61,60 @@ t_hook_mode_nothing_changed_is_instant() {
   assert_eq "" "$(cat "$STUB_LOG")" "no tool ran"
 }
 
+STOP_FIRST='{"hook_event_name":"Stop","stop_hook_active":false}'
+STOP_AGAIN='{"hook_event_name":"Stop","stop_hook_active":true}'
+
+t_stop_hook_active_never_blocks() {
+  setup; make_plan
+  change src/other.py
+  run bash "$V" --hook <<<"$STOP_FIRST"
+  assert_eq 2 "$RC" "first stop blocks"
+  run bash "$V" --hook <<<"$STOP_AGAIN"
+  assert_eq 0 "$RC" "stop_hook_active=true never blocks again"; assert_clean_stdout
+  assert_contains "$ERR" "Out-of-plan file: src/other.py" "summary still reported"
+  assert_contains "$ERR" "stop_hook_active" "verdict says why it does not block"
+  run bash "$V" --hook <<<'{"stop_hook_active" : true, "x": 1}'
+  assert_eq 0 "$RC" "spacing around the colon"
+  write_cfg '{"guards":{"hook_stages":"lint, typo"}}'
+  run bash "$V" --hook <<<"$STOP_AGAIN"
+  assert_eq 0 "$RC" "early config error does not block either"
+  assert_contains "$ERR" "unknown stage 'typo'" "error still reported"
+}
+
+# plan saved, user not yet asked to accept it: no task note (pl apply not run)
+plan_not_applied() { make_plan; rm notes/tasks/feat--x.md; }
+
+t_plan_not_applied_skips_in_hook_mode() {
+  setup; plan_not_applied
+  change src/a.py
+  run bash "$V" --hook <<<"$STOP_FIRST"
+  assert_eq 0 "$RC" "waiting for the user is not a failure: $ERR"; assert_clean_stdout
+  assert_contains "$ERR" "scope       SKIP  plan not applied yet" "says why scope was skipped"
+}
+
+t_plan_not_applied_still_fails_in_cli() {
+  setup; plan_not_applied
+  change src/a.py
+  run bash "$V"
+  assert_eq 1 "$RC" "plain CLI keeps its strictness"
+  assert_contains "$ERR" "no task note at" "plan-step message"
+  run bash "$V" --push
+  assert_eq 1 "$RC" "pre-push keeps its strictness"
+}
+
+# regression (cascade-lad, 2026-11-07): pl check WARNed, the agent waited for the user, and every stop was
+# blocked with "scope FAIL: no task note" until Claude Code's 8-block cap. Hook stages were lint + scope.
+t_regression_stop_loop_while_waiting_for_user() {
+  setup; plan_not_applied
+  write_cfg '{"guards":{"hook_stages":["lint","scope"]}}'
+  change src/a.py
+  for input in "$STOP_FIRST" "$STOP_AGAIN" "$STOP_AGAIN"; do
+    run bash "$V" --hook <<<"$input"
+    assert_eq 0 "$RC" "no stop is blocked while waiting: $ERR"
+    assert_not_contains "$ERR" "scope       FAIL" "scope is not a failure"
+  done
+}
+
 t_logged_in_decision_log_passes() {
   setup; make_plan
   change src/a.py
@@ -328,6 +382,10 @@ case_run "out-of-plan file fails with the documented message" t_out_of_plan_file
 case_run "--hook exits 2 on failure (default exits 1)" t_hook_mode_exits_2
 case_run "--hook exits 0 on success" t_hook_mode_passes_with_0
 case_run "--hook with nothing changed is instant" t_hook_mode_nothing_changed_is_instant
+case_run "stop_hook_active=true never exits 2" t_stop_hook_active_never_blocks
+case_run "plan not applied: SKIP in --hook" t_plan_not_applied_skips_in_hook_mode
+case_run "plan not applied: still fails in CLI and --push" t_plan_not_applied_still_fails_in_cli
+case_run "regression: no Stop loop while waiting for the user" t_regression_stop_loop_while_waiting_for_user
 case_run "file logged in this branch's decision passes" t_logged_in_decision_log_passes
 case_run "decision of another branch does not count" t_decision_for_another_branch_does_not_count
 case_run "decision must name the whole path" t_decision_must_name_the_whole_path

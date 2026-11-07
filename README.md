@@ -30,7 +30,7 @@ All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAM
 12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
 13. [Changelog v3](#13-changelog-v3)
 14. [Guards: scripts that always run (v0.3.0)](#14-guards-scripts-that-always-run-v030)
-15. [Changelog v0.3.1 / v0.3.0](#15-changelog-v031--v030)
+15. [Changelog v0.3.2 / v0.3.1 / v0.3.0](#15-changelog-v032--v031--v030)
 
 ---
 
@@ -58,7 +58,7 @@ agent-kit/
 ├── .agentkit.example.json     default configuration
 ├── FAILURES.md                log of corrected agent mistakes and the control that now prevents each
 ├── BACKLOG.md                 planned work for the next release (v0.4)
-└── VERSION                    0.3.1
+└── VERSION                    0.3.2
 ```
 
 Token cost is layered (progressive disclosure):
@@ -729,9 +729,14 @@ Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards 
 | `lint` | `ruff check` and `ruff format --check` | any violation or unformatted file |
 | `tests` | `pytest --cov --cov-report=xml:<guards.coverage_xml>` | a test fails, or none is collected |
 | `diff-cover` | `diff-cover <xml> --compare-branch=<base> --fail-under=<N>`: coverage of the **changed lines only** | below `fail_under` (default 90); skipped when tests failed |
-| `scope` | `git diff --name-only <base>...HEAD` plus uncommitted and untracked files, against the `Files:` of plan steps **1..active** | `Out-of-plan file: X. Log the reason in the decision log or revert.` A file passes if a decision logged **on this branch** names its full path (`nt decide --topic scope --text "src/x.py: needed by step 1"`). Skipped when the branch has no plan (lite path) |
+| `scope` | `git diff --name-only <base>...HEAD` plus uncommitted and untracked files, against the `Files:` of plan steps **1..active** | `Out-of-plan file: X. Log the reason in the decision log or revert.` A file passes if a decision logged **on this branch** names its full path (`nt decide --topic scope --text "src/x.py: needed by step 1"`). Skipped when the branch has no plan (lite path), and in `--hook` mode when the plan is saved but not applied yet (no task note) |
 
 It prints a compact summary to stderr, the failing stage's key lines, and `VERDICT: PASS (exit 0)` / `VERDICT: FAIL (exit N)`; nothing goes to stdout.
+
+<a id="verify-hook-mode"></a>**Hook mode (`--hook`, the Claude Code `Stop` hook) blocks only on what the agent can fix alone** (lint errors, out-of-plan files, failing tests). A state that waits for the user must not block, or every turn that ends with a question to the user is sent back to the agent, which can only loop:
+- **Plan saved but not applied** (no task note, e.g. `pl check` WARNed and the agent is waiting for a yes): scope is `SKIP  plan not applied yet`. The plain CLI and `--push` still fail with `no task note at …`.
+- **No plan at all**: scope is `SKIP` (lite path), as before.
+- **`stop_hook_active: true`** in the hook's stdin JSON (Claude is already continuing because of a Stop hook; [hooks docs](https://code.claude.com/docs/en/hooks)): `verify.sh` prints the full summary, ends with `VERDICT: FAIL (exit 0, not blocking: stop_hook_active …)` and exits 0, so it blocks a stop at most once per chain. This also covers early errors such as an unknown stage name in `guards.hook_stages`.
 
 **Exit codes**
 
@@ -739,7 +744,7 @@ It prints a compact summary to stderr, the failing stage's key lines, and `VERDI
 |---|---|---|
 | `guard-git.sh` from hook JSON on stdin | Claude Code hook | **exit 2** (stderr goes to the model). Exit 1 would *not* block. "Ask" = JSON on stdout, exit 0 |
 | `guard-git.sh` with the command as arguments | kit / git | exit 1; "ask" JSON on stdout, exit 0 |
-| `verify.sh` | CLI; `--hook` = Claude Code `Stop` hook | exit 1 by default, **exit 2 with `--hook`** (keeps the agent working; Claude Code itself stops blocking after 8 in a row). With `--hook`, nothing changed against the base branch exits 0 at once |
+| `verify.sh` | CLI; `--hook` = Claude Code `Stop` hook | exit 1 by default, **exit 2 with `--hook`** (keeps the agent working), but never when the hook input has `stop_hook_active: true` (see [hook mode](#verify-hook-mode)). With `--hook`, nothing changed against the base branch exits 0 at once |
 | `ruff-fix.sh` | Claude Code `PostToolUse` hook | exit 2 shows stderr to the agent (the edit already happened) |
 | `pre-push`, `plan-step.sh` | git hook / CLI | any non-zero |
 
@@ -829,7 +834,12 @@ python tools/selftest.py            # includes the installer and an end-to-end g
 
 The bash tests build throwaway git repos, put stub `ruff`/`pytest`/`diff-cover` first on `PATH`, and use real `git push` into a bare remote for `pre-push`. No bats needed. CI runs both on Ubuntu, Windows and macOS.
 
-## 15. Changelog v0.3.1 / v0.3.0
+## 15. Changelog v0.3.2 / v0.3.1 / v0.3.0
+
+### v0.3.2
+
+**Fixed**
+- `verify.sh --hook` no longer loops the Stop hook while the agent waits for the user. It reads `stop_hook_active` from the hook input and never exits 2 when it is true (summary still printed, exit 0). A plan that is saved but not applied (no task note) is `SKIP` in hook mode instead of `FAIL`; the plain CLI and `--push` are unchanged ([hook mode](#verify-hook-mode), FAILURES.md 2026-11-07).
 
 ### v0.3.1
 
