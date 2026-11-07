@@ -22,9 +22,23 @@ jobs:
         run: |
           git config --global user.name "agent-kit-ci"
           git config --global user.email "ci@example.com"
+      - name: Ensure jq (the bash guards need it)
+        shell: bash
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              Linux) sudo apt-get install -y jq ;;
+              macOS) brew install jq ;;
+              Windows) choco install jq -y ;;
+            esac
+          fi
+          jq --version
       - name: Validate skills
         run: python tools/validate_skills.py
       - name: Selftest
         run: python tools/selftest.py
       - name: Selftest with a cp1252 console
         run: python tools/selftest.py --cp1252
+      - name: Guard script tests (bash)
+        shell: bash
+        run: bash scripts/test-kit.sh

@@ -8,7 +8,7 @@ It is built around three goals:
 - **Engineering over judgment.** Anything that has a rule (commit format, branch policy, secrets, plan completeness, test results) is decided by a Python script, not by the model.
 - **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, tracking experiments, writing prompts.
 
-All scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction.
+All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#14-guards-scripts-that-always-run-v030) (v0.3.0, `scripts/`) are bash and need `bash`, `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
 
 ---
 
@@ -29,6 +29,8 @@ All scripts are Python 3.9+ standard library only (PyYAML optional for YAML conf
 11. [Git hooks](#11-git-hooks)
 12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
 13. [Changelog v3](#13-changelog-v3)
+14. [Guards: scripts that always run (v0.3.0)](#14-guards-scripts-that-always-run-v030)
+15. [Changelog v0.3.0](#15-changelog-v030)
 
 ---
 
@@ -48,10 +50,14 @@ agent-kit/
 │   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
 │   ├── tracking-experiments/  (optional) training/eval run log tied to git commits (exp.py)
 │   └── crafting-prompts/      (optional) prompts for a target model from a spec, with tests (promptkit.py)
-├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, commands/grill.md
+├── scripts/                   guards (bash + git + jq): guard-git.sh, verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh,
+│                              test-kit.sh + tests/
+├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, commands/grill.md, claude-hooks.json
 ├── tools/                     install.py, validate_skills.py, selftest.py, bench/ (benchmark harness)
 ├── .github/workflows/         selftest.yml: 3 OSes x Python 3.9/3.13
-└── .agentkit.example.json     default configuration
+├── .agentkit.example.json     default configuration
+├── FAILURES.md                log of corrected agent mistakes and the control that now prevents each
+└── VERSION                    0.3.0
 ```
 
 Token cost is layered (progressive disclosure):
@@ -89,6 +95,7 @@ python agent-kit/tools/install.py path/to/your-project --git-hooks           # p
 | `--git-hooks` | Install `pre-commit` (`gitkit scan --staged`) and `commit-msg` (`gitkit lint-msg`) git hooks; see [Git hooks](#11-git-hooks) |
 | `--uninstall-git-hooks` | Remove only the blocks the kit added to those hooks |
 | `--hooks` | Claude Code SessionStart hook that runs `notes.py brief` (below) |
+| `--guards` [`--team`] | The bash guards, their Claude Code hooks and a `pre-push` git hook; see [Guards](#14-guards-scripts-that-always-run-v030). Hooks go to the uncommitted `.claude/settings.local.json`; `--team` writes the shared `.claude/settings.json` instead |
 | `--force` | Overwrite existing `.claude/skills/<name>` entries that are not links |
 | `--user` | Skills only, into `~/.claude/skills` (core + `--with`) |
 
@@ -588,6 +595,7 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | `context.zone_max_files` | 40 | Zone file lines `rmap --zone` prints before "… +k more" |
 | `debug.min_similarity` | 0.4 | Keyword overlap (0–1) at which `dbg` calls two bugs similar |
 | `verify.format/lint/typecheck/test` | `auto` | `auto`, a command, or `null` to skip |
+| `guards.*` | see [Guards](#configuration-guards) | `ruff`, `pytest`, `diff_cover`, `scope` switches, tool commands, `fail_under`, `coverage_xml`, `scope_ignore`, `merge_convention`, `require_merge_commits`, `verify_on_push` |
 | `experiments.dir`, `experiments.default_metrics` | `experiments`, `[]` | Run log location; columns for `ex list` |
 | `prompts.dir/provider/model/base_url/key_env` | `prompts`, `openai`, — | Defaults for `pk test` |
 | `prompts.max_tokens_warn` | 3000 | Lint warning threshold |
@@ -685,6 +693,150 @@ The selftest runs all of this against a fake `claude` on `PATH` that emits canne
 - `install.py --git-hooks` / `--uninstall-git-hooks` (see [Git hooks](#11-git-hooks)); `lint-msg` accepts `fixup!`, `squash!`, `amend!` and ignores the `git commit -v` scissors section.
 - `tools/selftest.py` (35 scenarios, `--cp1252`) and GitHub Actions CI on 3 OSes × Python 3.9 / 3.13.
 - `tools/bench/` benchmark harness with a fake `claude` for tests ([Benchmark](#12-benchmark-does-the-kit-help)).
+
+## 14. Guards: scripts that always run (v0.3.0)
+
+Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are plain bash scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none (a human at a terminal).
+
+**Requirements:** `bash`, `git`, `jq` (on Windows: Git for Windows' bash). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
+
+**Two real failures these exist for** (details and the control for each: [FAILURES.md](FAILURES.md)):
+
+| Failure | Control |
+|---|---|
+| The agent fast-forwarded a stage branch into `main`; the repo convention is a `--no-ff` merge commit | `guard-git.sh` blocks the command and prints how to inspect the convention; `pre-push` rejects the push even if the agent got around the hook; managing-git has a mandatory pre-merge `git log --first-parent --merges -5` |
+| Code drifted from the plan; transformations shipped untested or weakly tested | Plan steps are machine-readable; `verify.sh` fails on files outside the plan and on uncovered changed lines |
+
+### What each script does
+
+| Script | Runs from | Behavior |
+|---|---|---|
+| `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | On a protected branch: **blocks** `git merge` without `--no-ff`, any `--ff-only`, any `--squash` (`--abort/--continue/--quit` pass). A `git commit`, or a push that targets a protected branch, returns `permissionDecision: "ask"` so you approve. Follows `git switch/checkout` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes and `bash -c`. The block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
+| `pre-push` | git (any agent, or none) | For a push to a protected branch every commit on the pushed range's **first-parent line** must be a merge commit (≥ 2 parents), so a fast-forwarded feature branch is refused. Handles a new branch on the remote; deletes and tags are not judged; the first push to a remote with no branches is let through. Then runs `verify.sh` |
+| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push`, by hand | The single "is this done?" gate, see below |
+| `plan-step.sh <field>` | `verify.sh`, the agent | Prints a field of the active plan step (`title mode files contract tests out-of-scope verify`); `--cumulative` for steps 1..active; a missing field, step or plan is an error |
+| `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only; anything else is a no-op. Problems it cannot fix are shown to the agent |
+| `lib.sh` | sourced | Config reading (`jq` on `.agentkit.json`), protected-branch matching, base branch, slug |
+
+**`verify.sh` stages, in order** (each can be switched off, see [Configuration](#configuration-guards)):
+
+| Stage | Runs | Fails when |
+|---|---|---|
+| `lint` | `ruff check` and `ruff format --check` | any violation or unformatted file |
+| `tests` | `pytest --cov --cov-report=xml:<guards.coverage_xml>` | a test fails, or none is collected |
+| `diff-cover` | `diff-cover <xml> --compare-branch=<base> --fail-under=<N>`: coverage of the **changed lines only** | below `fail_under` (default 90); skipped when tests failed |
+| `scope` | `git diff --name-only <base>...HEAD` plus uncommitted and untracked files, against the `Files:` of plan steps **1..active** | `Out-of-plan file: X. Log the reason in the decision log or revert.` A file passes if a decision logged **on this branch** names its full path (`nt decide --topic scope --text "src/x.py: needed by step 1"`). Skipped when the branch has no plan (lite path) |
+
+It prints a compact summary to stderr, the failing stage's key lines, and `VERDICT: PASS (exit 0)` / `VERDICT: FAIL (exit N)`; nothing goes to stdout.
+
+**Exit codes**
+
+| Script | Convention | Block |
+|---|---|---|
+| `guard-git.sh` from hook JSON on stdin | Claude Code hook | **exit 2** (stderr goes to the model). Exit 1 would *not* block. "Ask" = JSON on stdout, exit 0 |
+| `guard-git.sh` with the command as arguments | kit / git | exit 1; "ask" JSON on stdout, exit 0 |
+| `verify.sh` | CLI; `--hook` = Claude Code `Stop` hook | exit 1 by default, **exit 2 with `--hook`** (keeps the agent working; Claude Code itself stops blocking after 8 in a row). With `--hook`, nothing changed against the base branch exits 0 at once |
+| `ruff-fix.sh` | Claude Code `PostToolUse` hook | exit 2 shows stderr to the agent (the edit already happened) |
+| `pre-push`, `plan-step.sh` | git hook / CLI | any non-zero |
+
+Debug output always goes to stderr; stdout is reserved for the "ask" JSON because Claude Code may parse it.
+
+### Install
+
+```bash
+python agent-kit/tools/install.py path/to/repo --guards           # personal trial (default)
+python agent-kit/tools/install.py path/to/repo --guards --team    # team-wide
+python agent-kit/tools/install.py path/to/repo --uninstall-git-hooks   # also removes the pre-push block
+```
+
+| | local trial (default) | `--team` |
+|---|---|---|
+| Claude Code hooks go to | `.claude/settings.local.json`, kept out of git through `.git/info/exclude` | `.claude/settings.json` (commit it) |
+| `.agentkit/scripts/` | copied; leave it uncommitted for a trial | copied; commit it |
+| `pre-push` git hook | `.git/hooks/pre-push` (always local to the clone) | same |
+
+Both: existing settings are **merged, never overwritten** (a hook already present is not added twice; a settings file that is not valid JSON is left untouched with exit 2 and a hint). An existing `pre-push` hook is kept: the kit's block is inserted after its shebang, and it hands git's ref lines on to the hook that follows. `.agentkit/coverage.xml` and `.coverage` are added to `.gitignore`. A header-only `FAILURES.md` is created if missing (with `merge=union`, like the decision log).
+
+**`merge.ff`:** the installer prints what `git config merge.ff false` does (it writes this clone's `.git/config` only, and makes every `git merge`/`git pull` in the clone create a merge commit instead of fast-forwarding, including `git pull` on a feature branch) and asks `[y/N]`. Without an interactive terminal it changes nothing and prints the command.
+
+The Claude Code hook JSON (`PreToolUse` → `hookSpecificOutput.permissionDecision: "ask"`, exit 2 to block, `.tool_input.command` / `.tool_input.file_path` on stdin) follows https://code.claude.com/docs/en/hooks. It has been checked against that page and by tests that feed the scripts hook-shaped JSON; it has not been exercised in a live Claude Code session.
+
+### Plan steps the scripts can read
+
+`writing-plans` now asks for this shape (`pl template` prints it; `pl check` enforces it; the old `## 1.` / Do / Done shape still parses and gets a WARN):
+
+```
+### Step N: <title>
+- Mode: solo | pipeline
+- Files: <path>, <path> (new)
+- Contract: <signatures, input/output, invariants>
+- Tests: <test_name>, <test_name>      # written before code; this is the definition of done
+- Out of scope: <what must not be touched>
+- Verify: <command>                     # optional
+```
+
+The plan lives at `pl path` (`notes/tasks/<branch>.plan.md`). The **active step** is the first unchecked item of the task note's `## Plan` checklist (the note `nt task --check N` already maintains; with everything ticked, the last step). There is no second marker. The scope check allows the files of steps 1 through the active one, so finished steps do not trip it and later steps' files do.
+
+### Configuration (guards)
+
+`.agentkit.json` → `guards` (plus the existing `git.protected_branches`, `git.protected_commit`, `notes.dir`, `notes.base_branch`). Every key is optional.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ruff` / `pytest` / `diff_cover` / `scope` | `true` | `false` skips that `verify.sh` stage (and `ruff-fix.sh` for `ruff`) |
+| `ruff_cmd` / `pytest_cmd` / `diff_cover_cmd` | `ruff` / `pytest` / `diff-cover` | Command, split on spaces (e.g. `python -m pytest`); no quoting inside |
+| `pytest_args` | `""` | Extra pytest arguments, e.g. `--cov=src` |
+| `coverage_xml` | `.agentkit/coverage.xml` | Where the coverage report is written and read |
+| `fail_under` | `90` | Minimum coverage (%) of the changed lines |
+| `scope_ignore` | `null` (built-in) | Globs the scope check never reports; built-in: `.agentkit/*`, `.agentkit.json`, `<notes.dir>/*`, `FAILURES.md`, `.coverage*`, `coverage.xml` |
+| `merge_convention` | `null` | Free text shown in merge and push block messages |
+| `require_merge_commits` | `true` | `pre-push`: protected branches take merge commits only |
+| `verify_on_push` | `true` | `pre-push` also runs `verify.sh` |
+| `git.protected_branches` | `main, master, develop, release/*` | Branch globs the guards protect |
+| `git.protected_commit` | `ask` | For commits and pushes to a protected branch: `ask` (you approve), `allow`, `block` |
+| `notes.base_branch` | auto | The base for `diff-cover` and the scope check; auto = `origin/HEAD`, else the first existing protected branch |
+
+**Opt out per stage**, for example a repo with no tests yet and no plan discipline:
+
+```json
+{ "guards": { "pytest": false, "diff_cover": false, "scope": false } }
+```
+
+To drop a whole guard, delete its entry from the hooks file (`PreToolUse`/`PostToolUse`/`Stop`) or run `--uninstall-git-hooks` for `pre-push`. Setting `guards.require_merge_commits` and `guards.verify_on_push` to `false` keeps `pre-push` installed but idle.
+
+### Failure log
+
+`FAILURES.md` records every mistake the agent made that you corrected: date, what happened, root cause, **the control that now prevents it**. `AGENTS.md` makes it a rule for the agent, and asks for a computational control (a script or hook) before a new instruction line. It is separate from `notes/decisions.md`, which records what to build and is capped at 600 characters per entry.
+
+### Known limits
+
+- `guard-git.sh` reads the command text; it is not a sandbox. It does not follow aliases, scripts, shell expansion or `git pull` (which can fast-forward). `pre-push` is the backstop for what reaches the remote.
+- `verify.sh --hook` runs every enabled stage whenever Claude finishes a turn on a branch that differs from the base. Switch stages off, or scope `pytest_args`, for slow suites.
+- `ruff` runs on the whole repo (`.`), following the project's own ruff configuration.
+- The scope check needs a plan; a `/task` lite-path change has none and is skipped, with a note.
+
+### Testing the kit itself
+
+```bash
+bash scripts/test-kit.sh            # all bash tests; or: bash scripts/test-kit.sh guard-git
+python tools/selftest.py            # includes the installer and an end-to-end guard scenario (G1-G5)
+```
+
+The bash tests build throwaway git repos, put stub `ruff`/`pytest`/`diff-cover` first on `PATH`, and use real `git push` into a bare remote for `pre-push`. No bats needed. CI runs both on Ubuntu, Windows and macOS.
+
+## 15. Changelog v0.3.0
+
+The kit's first versioned release (`VERSION`); it follows the unversioned "v3" above.
+
+**Added**
+- `scripts/` guards: `guard-git.sh`, `verify.sh`, `pre-push`, `plan-step.sh`, `ruff-fix.sh`, `lib.sh`, and `test-kit.sh` with bash tests ([Guards](#14-guards-scripts-that-always-run-v030)).
+- `install.py --guards [--team]` (scripts, Claude Code hooks merge, `pre-push` block, `merge.ff` prompt); `--uninstall-git-hooks` also removes the `pre-push` block.
+- `FAILURES.md` and the failure-log rule in `AGENTS.md`; the installer creates a header-only `FAILURES.md` in your repo.
+- `guards` section in `.agentkit.example.json`; `templates/claude-hooks.json`.
+- managing-git: mandatory pre-merge history check (`git log --first-parent --merges -5 <target> --oneline`).
+
+**Changed**
+- Plan steps are `### Step N:` with `Mode`, `Files`, `Contract`, `Tests`, `Out of scope` (and optional `Verify`). `plan.py` reads both formats; `pl check` WARNs on the old one (exit 2), so scripts that expected exit 0 for an old-format plan need the new format.
 
 ## Credits
 
