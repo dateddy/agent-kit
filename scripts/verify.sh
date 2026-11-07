@@ -10,7 +10,7 @@
 # All output goes to stderr (stdout may be parsed as JSON by Claude Code).
 #
 # Stages, in order (each skippable with guards.<key>=false in .agentkit.json):
-#   lint        ruff check . ; ruff format --check .                 guards.ruff       guards.ruff_cmd
+#   lint        ruff check . ; ruff format --check . (never .agentkit or .claude)  guards.ruff  guards.ruff_cmd
 #   tests       pytest --cov --cov-report=xml:<guards.coverage_xml>  guards.pytest     guards.pytest_cmd, guards.pytest_args
 #   diff-cover  coverage of changed lines vs the base branch         guards.diff_cover guards.diff_cover_cmd, guards.fail_under
 #   scope       changed files vs the Files: of plan steps 1..active  guards.scope      guards.scope_ignore
@@ -81,8 +81,8 @@ stage_lint() {
   local R rc=0
   read -r -a R <<<"$(cfg guards.ruff_cmd ruff)"
   tool_missing "${R[0]}" ruff "$1" && return 1
-  "${R[@]}" check --quiet --output-format concise . >"$1" 2>&1 || rc=1
-  "${R[@]}" format --check . >>"$1" 2>&1 || rc=1
+  "${R[@]}" check --quiet --output-format concise "${AK_RUFF_EXCLUDE[@]}" . >"$1" 2>&1 || rc=1
+  "${R[@]}" format --check "${AK_RUFF_EXCLUDE[@]}" . >>"$1" 2>&1 || rc=1
   return $rc
 }
 

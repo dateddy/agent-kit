@@ -21,8 +21,8 @@ cfg_on guards.ruff true || exit 0
 read -r -a R <<<"$(cfg guards.ruff_cmd ruff)"
 need "${R[0]}" ruff
 
-out=$("${R[@]}" check --fix --quiet "$file" 2>&1) && rc=0 || rc=$?
-"${R[@]}" format --quiet "$file" >/dev/null 2>&1
+out=$("${R[@]}" check --fix --quiet --force-exclude "${AK_RUFF_EXCLUDE[@]}" "$file" 2>&1) && rc=0 || rc=$?
+"${R[@]}" format --quiet --force-exclude "${AK_RUFF_EXCLUDE[@]}" "$file" >/dev/null 2>&1
 if [ "$rc" -ne 0 ]; then
   echo "ruff left problems in $file:" >&2
   printf '%s\n' "$out" | tail -n 15 >&2

@@ -93,3 +93,6 @@ need() {
   command -v "$1" >/dev/null 2>&1 \
     || ak_fail "$1 not found: install it, or set guards.$2 to false in .agentkit.json to skip this stage"
 }
+
+# ruff must not lint the kit's own vendored scripts or the agent settings directory
+AK_RUFF_EXCLUDE=(--extend-exclude .agentkit --extend-exclude .claude)

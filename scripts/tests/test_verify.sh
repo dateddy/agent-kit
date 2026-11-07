@@ -22,8 +22,8 @@ t_all_pass_and_tool_arguments() {
   assert_eq 0 "$RC" "rc"; assert_clean_stdout
   assert_contains "$ERR" "VERDICT: PASS" "verdict"
   log=$(cat "$STUB_LOG")
-  assert_contains "$log" "ruff check --quiet --output-format concise ." "ruff check, concise output"
-  assert_contains "$log" "ruff format --check ." "ruff format --check"
+  assert_contains "$log" "ruff check --quiet --output-format concise --extend-exclude .agentkit --extend-exclude .claude ." "ruff check: concise, kit dirs excluded"
+  assert_contains "$log" "ruff format --check --extend-exclude .agentkit --extend-exclude .claude ." "ruff format --check: kit dirs excluded"
   assert_contains "$log" "pytest --cov --cov-report=xml:.agentkit/coverage.xml" "pytest with coverage xml"
   assert_contains "$log" "diff-cover .agentkit/coverage.xml --compare-branch=main --fail-under=90" "diff-cover defaults"
 }
