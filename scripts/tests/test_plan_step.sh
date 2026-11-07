@@ -4,43 +4,6 @@
 
 PS="$KIT_SCRIPTS/plan-step.sh"
 
-# make_plan [checked-steps...]: plan + task note for branch feat/x; each argument checks that step
-make_plan() {
-  git switch -q -c feat/x
-  mkdir -p notes/tasks
-  cat >notes/tasks/feat--x.plan.md <<'EOF'
-# Plan: demo
-Constraints: none
-Done when: tests pass
-Out of scope: everything else
-
-### Step 1: Parse input
-- Mode: solo
-- Files: src/a.py, tests/test_a.py (new)
-- Contract: parse(s) -> int
-  invariant: result is positive
-- Tests: test_parse_ok, test_parse_zero
-- Out of scope: src/b.py
-- Verify: pytest tests/test_a.py
-
-### Step 2: Write output
-- Mode: pipeline
-- Files: src/b.py, src/a.py
-- Contract: write(n) -> None
-- Tests: test_write
-- Out of scope: src/a.py signatures
-EOF
-  {
-    echo "# Task: demo"; echo "- branch: feat/x"; echo; echo "## Plan"
-    local i mark
-    for i in 1 2; do
-      mark=" "
-      for c in "$@"; do [ "$c" = "$i" ] && mark=x; done
-      echo "- [$mark] $i. step $i"
-    done
-    echo; echo "## Next"; echo "x"
-  } >notes/tasks/feat--x.md
-}
 
 t_active_is_first_unchecked() {
   make_plan
