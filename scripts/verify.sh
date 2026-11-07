@@ -5,8 +5,11 @@
 #   default   : plain CLI / git hook. 0 = every enabled stage passed, 1 = a stage failed.
 #   --push    : called by pre-push. Same exit codes as the default; selects guards.push_stages.
 #   --hook    : Claude Code Stop hook. 0 = pass, 2 = fail (exit 2 stops Claude from finishing and feeds
-#               stderr back to it; exit 1 would not block). Stdin (the hook JSON) is drained and ignored:
-#               Claude Code itself overrides a Stop block after 8 in a row, so no stop_hook_active logic here.
+#               stderr back to it; exit 1 would not block). It blocks only on failures the agent can fix
+#               alone (lint, out-of-plan files, tests); a state that waits for the user (plan saved but not
+#               applied: no task note) is a SKIP. If the hook JSON on stdin has "stop_hook_active": true
+#               (Claude is already continuing because of a Stop hook), it never exits 2: the summary is
+#               printed and it exits 0, so a stop is blocked at most once per chain.
 #               In hook mode a tree with nothing changed against the base branch exits 0 at once.
 # All output goes to stderr (stdout may be parsed as JSON by Claude Code).
 #
@@ -34,11 +37,21 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ "$HOOK" = 1 ]; then AK_FAIL=2; FAIL_RC=2; else AK_FAIL=1; FAIL_RC=1; fi
+STOP_ACTIVE=0
+if [ "$HOOK" = 1 ] && [ ! -t 0 ]; then
+  HOOK_IN=$(cat)
+  # Stop / SubagentStop input field, https://code.claude.com/docs/en/hooks (checked 2026-11-07): "The
+  # `stop_hook_active` field is `true` when Claude Code is already continuing as a result of a stop hook.
+  # Check this value or process the transcript to avoid blocking on a condition that will never resolve."
+  # Matched with grep, not jq, so it is read before lib.sh can fail (e.g. jq missing) with exit 2.
+  printf '%s' "$HOOK_IN" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true' && STOP_ACTIVE=1
+fi
+if [ "$HOOK" = 1 ] && [ "$STOP_ACTIVE" = 0 ]; then AK_FAIL=2; FAIL_RC=2
+elif [ "$HOOK" = 1 ]; then AK_FAIL=0; FAIL_RC=0  # report, never block twice in one chain
+else AK_FAIL=1; FAIL_RC=1; fi
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
-[ "$HOOK" = 1 ] && [ ! -t 0 ] && cat >/dev/null
 git rev-parse --git-dir >/dev/null 2>&1 || { [ "$HOOK" = 1 ] && exit 0; ak_fail "verify.sh: not inside a git repository"; }
 cd "$AK_ROOT" || exit "$FAIL_RC"
 
@@ -167,6 +180,10 @@ stage_scope() {
   local plan allowed logged f n=0
   plan="$(notes_dir)/tasks/$(slug "${BRANCH:-detached}").plan.md"
   if [ -z "$BRANCH" ] || [ ! -f "$plan" ]; then NOTE="no plan for this branch (lite path)"; return 3; fi
+  # hook mode: a saved plan without a task note is usually waiting for the user to accept it; never block on it
+  if [ "$HOOK" = 1 ] && [ ! -f "$(notes_dir)/tasks/$(slug "$BRANCH").md" ]; then
+    NOTE="plan not applied yet (no task note): run pl apply once the plan is accepted"; return 3
+  fi
   [ -n "$BASE" ] || { echo "no base branch found: set notes.base_branch in .agentkit.json" >"$1"; return 1; }
   allowed=$(bash "$HERE/plan-step.sh" files --cumulative 2>"$1") || return 1
   : >"$1"
@@ -215,6 +232,10 @@ for i in "${!NAMES[@]}"; do
 done
 if [ "$FAILED" -eq 0 ]; then
   echo "VERDICT: PASS (exit 0)" >&2
+  exit 0
+fi
+if [ "$STOP_ACTIVE" = 1 ]; then
+  echo "VERDICT: FAIL (exit 0, not blocking: stop_hook_active is true, this stop was already blocked once) - report the failing stage to the user" >&2
   exit 0
 fi
 echo "VERDICT: FAIL (exit $FAIL_RC) - fix the failing stage above and re-run verify.sh" >&2
