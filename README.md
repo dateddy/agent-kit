@@ -713,7 +713,7 @@ Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards 
 |---|---|---|
 | `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | On a protected branch: **blocks** `git merge` without `--no-ff`, any `--ff-only`, any `--squash` (`--abort/--continue/--quit` pass). A `git commit`, or a push that targets a protected branch, returns `permissionDecision: "ask"` so you approve. Follows `git switch/checkout` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes and `bash -c`. The block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
 | `pre-push` | git (any agent, or none) | For a push to a protected branch every commit on the pushed range's **first-parent line** must be a merge commit (≥ 2 parents), so a fast-forwarded feature branch is refused. Handles a new branch on the remote; deletes and tags are not judged; the first push to a remote with no branches is let through. Then runs `verify.sh` |
-| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push`, by hand | The single "is this done?" gate, see below |
+| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push` (`--push`), by hand | The single "is this done?" gate, see below; `--stages`, `guards.hook_stages` and `guards.push_stages` pick which stages run per caller |
 | `plan-step.sh <field>` | `verify.sh`, the agent | Prints a field of the active plan step (`title mode files contract tests out-of-scope verify`); `--cumulative` for steps 1..active; a missing field, step or plan is an error |
 | `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only; anything else is a no-op. Problems it cannot fix are shown to the agent |
 | `lib.sh` | sourced | Config reading (`jq` on `.agentkit.json`), protected-branch matching, base branch, slug |
@@ -784,6 +784,7 @@ The plan lives at `pl path` (`notes/tasks/<branch>.plan.md`). The **active step*
 | Key | Default | Meaning |
 |---|---|---|
 | `ruff` / `pytest` / `diff_cover` / `scope` | `true` | `false` skips that `verify.sh` stage (and `ruff-fix.sh` for `ruff`) |
+| `hook_stages` / `push_stages` | `null` (all) | Stages `verify.sh` runs from the Claude Code `Stop` hook (`--hook`) / from `pre-push` (`--push`), e.g. `["lint", "scope"]` and `["tests", "diff-cover"]`. Names: `lint`, `tests`, `diff-cover`, `scope`; an unknown name is an error. `verify.sh --stages a,b` overrides both; a plain `verify.sh` runs every enabled stage |
 | `ruff_cmd` / `pytest_cmd` / `diff_cover_cmd` | `ruff` / `pytest` / `diff-cover` | Command, split on spaces (e.g. `python -m pytest`); no quoting inside |
 | `pytest_args` | `""` | Extra pytest arguments, e.g. `--cov=src` |
 | `coverage_xml` | `.agentkit/coverage.xml` | Where the coverage report is written and read |

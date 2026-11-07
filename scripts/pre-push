@@ -11,7 +11,8 @@
 #    range = <remote sha>..<local sha>; for a new branch (remote sha all zeros), or a remote sha this clone
 #    does not have: every commit of <local sha> that no remote-tracking ref of this remote contains.
 #    The very first push to a remote with no branches at all is let through (nothing to merge into).
-# 2. Then verify.sh runs once (guards.verify_on_push, default on); its failure rejects the push.
+# 2. Then verify.sh --push runs once (guards.verify_on_push, default on; stages from guards.push_stages);
+#    its failure rejects the push.
 # Deleting a branch or pushing a tag is not judged by (1).
 set -u
 AK_FAIL=1
@@ -69,6 +70,6 @@ done
 
 [ "$bad" -eq 0 ] || exit 1
 if [ "$pushed" -eq 1 ] && cfg_on guards.verify_on_push true; then
-  bash "$HERE/verify.sh" || { echo "BLOCK: verify.sh failed; fix it, or set guards.verify_on_push to false in .agentkit.json" >&2; exit 1; }
+  bash "$HERE/verify.sh" --push || { echo "BLOCK: verify.sh failed; fix it, or set guards.verify_on_push to false in .agentkit.json" >&2; exit 1; }
 fi
 exit 0

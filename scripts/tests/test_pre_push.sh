@@ -138,6 +138,16 @@ t_verify_runs_on_push_and_can_block() {
   assert_contains "$ERR" "verify.sh failed" "message"
 }
 
+t_push_uses_push_stages() {
+  published; feature
+  write_cfg '{"guards":{"hook_stages":["lint","scope"],"push_stages":["tests","diff-cover"]}}'
+  run git push origin feat/x
+  assert_eq 0 "$RC" "push ok: $ERR"
+  log=$(cat "$STUB_LOG")
+  assert_contains "$log" "pytest --cov" "tests ran on push"
+  assert_not_contains "$log" "ruff" "lint not run on push"
+}
+
 t_verify_not_run_for_delete_only() {
   published; feature
   git push -q origin feat/x 2>/dev/null
@@ -159,5 +169,6 @@ case_run "branch delete and tag push are allowed" t_delete_and_tag_are_allowed
 case_run "guards.require_merge_commits=false" t_switch_off_by_config
 case_run "configured branches and convention text" t_configured_branch_and_convention_text
 case_run "verify.sh runs on push and can block it" t_verify_runs_on_push_and_can_block
+case_run "pre-push runs verify.sh with guards.push_stages" t_push_uses_push_stages
 case_run "delete-only push skips verify" t_verify_not_run_for_delete_only
 finish
