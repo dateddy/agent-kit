@@ -81,7 +81,7 @@ stage_lint() {
   local R rc=0
   read -r -a R <<<"$(cfg guards.ruff_cmd ruff)"
   tool_missing "${R[0]}" ruff "$1" && return 1
-  "${R[@]}" check . >"$1" 2>&1 || rc=1
+  "${R[@]}" check --quiet --output-format concise . >"$1" 2>&1 || rc=1
   "${R[@]}" format --check . >>"$1" 2>&1 || rc=1
   return $rc
 }
@@ -178,12 +178,13 @@ run_stage diff_cover diff-cover stage_diffcover
 run_stage scope scope stage_scope
 
 for i in "${!NAMES[@]}"; do
-  printf '%-11s %-5s %s\n' "${NAMES[i]}" "${STATUS[i]}" "${NOTES[i]}" >&2
+  printf '%-11s %-5s %s\n' "${NAMES[i]}" "${STATUS[i]}" "${NOTES[i]}" | sed 's/ *$//' >&2
 done
 for i in "${!NAMES[@]}"; do
   [ "${STATUS[i]}" = FAIL ] || continue
   echo "--- ${NAMES[i]}" >&2
-  tail -n 15 "${DETAILS[i]}" >&2
+  # lint lists its violations first; the other tools put the useful part last
+  if [ "${NAMES[i]}" = lint ]; then head -n 15 "${DETAILS[i]}" >&2; else tail -n 15 "${DETAILS[i]}" >&2; fi
 done
 if [ "$FAILED" -eq 0 ]; then
   echo "VERDICT: PASS (exit 0)" >&2
