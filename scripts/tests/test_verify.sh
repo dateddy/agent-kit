@@ -6,36 +6,9 @@
 V="$KIT_SCRIPTS/verify.sh"
 RF="$KIT_SCRIPTS/ruff-fix.sh"
 
-# stubs: log their arguments to $STUB_LOG; exit codes come from STUB_RUFF_RC / STUB_PYTEST_RC / STUB_DC_RC
-STUB_BIN="$TMP_ROOT/bin"
-mkdir -p "$STUB_BIN"
-cat >"$STUB_BIN/ruff" <<'EOF'
-#!/usr/bin/env bash
-echo "ruff $*" >>"$STUB_LOG"
-if [ "${STUB_RUFF_RC:-0}" -ne 0 ]; then echo "ruff: E501 line too long (stub)"; fi
-exit "${STUB_RUFF_RC:-0}"
-EOF
-cat >"$STUB_BIN/pytest" <<'EOF'
-#!/usr/bin/env bash
-echo "pytest $*" >>"$STUB_LOG"
-for a in "$@"; do case $a in --cov-report=xml:*) mkdir -p "$(dirname "${a#--cov-report=xml:}")"; echo "<coverage/>" >"${a#--cov-report=xml:}" ;; esac; done
-if [ "${STUB_PYTEST_RC:-0}" -ne 0 ]; then echo "1 failed (stub)"; fi
-exit "${STUB_PYTEST_RC:-0}"
-EOF
-cat >"$STUB_BIN/diff-cover" <<'EOF'
-#!/usr/bin/env bash
-echo "diff-cover $*" >>"$STUB_LOG"
-if [ "${STUB_DC_RC:-0}" -ne 0 ]; then echo "Failure. Coverage is 50%, below 90% (stub)"; fi
-exit "${STUB_DC_RC:-0}"
-EOF
-chmod +x "$STUB_BIN"/*
-export PATH="$STUB_BIN:$PATH"
+install_stubs
 
-setup() {
-  export STUB_LOG="$TMP_ROOT/stub.log"
-  : >"$STUB_LOG"
-  unset STUB_RUFF_RC STUB_PYTEST_RC STUB_DC_RC
-}
+setup() { reset_stubs; }
 
 # change <path>: commit a file on the current branch
 change() { commit_file "$1" "x" "feat: $1"; }

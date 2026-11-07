@@ -46,6 +46,31 @@
     "test": "auto"
   },
 
+  "guards": {
+    "_comment": "Read by scripts/*.sh (install.py --guards). git.protected_branches, git.protected_commit, notes.dir and notes.base_branch above are used too. false switches a stage off; a missing tool fails its stage.",
+    "ruff": true,
+    "_ruff_cmd": "command for the lint stage (split on spaces, no quoting): ruff check --quiet --output-format concise . ; ruff format --check .",
+    "ruff_cmd": "ruff",
+    "pytest": true,
+    "pytest_cmd": "pytest",
+    "_pytest_args": "extra pytest arguments, e.g. --cov=src ; the coverage report is always --cov --cov-report=xml:<coverage_xml>",
+    "pytest_args": "",
+    "coverage_xml": ".agentkit/coverage.xml",
+    "diff_cover": true,
+    "diff_cover_cmd": "diff-cover",
+    "_fail_under": "minimum coverage (%) of the lines changed against the base branch",
+    "fail_under": 90,
+    "scope": true,
+    "_scope_ignore": "globs the scope check never reports; null = built-in list (.agentkit/*, .agentkit.json, <notes.dir>/*, FAILURES.md, coverage files)",
+    "scope_ignore": null,
+    "_merge_convention": "free text shown in merge/push block messages, e.g. \"merge commit named feat(<scope>): merge X\"",
+    "merge_convention": null,
+    "_require_merge_commits": "pre-push: every first-parent commit pushed to a protected branch must be a merge commit",
+    "require_merge_commits": true,
+    "_verify_on_push": "pre-push also runs verify.sh",
+    "verify_on_push": true
+  },
+
   "experiments": {
     "dir": "experiments",
     "_default_metrics": "columns shown by `exp.py list`, e.g. [\"eval.f1\", \"eval.recall@5\"]",

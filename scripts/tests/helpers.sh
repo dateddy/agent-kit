@@ -106,3 +106,38 @@ EOF
     echo; echo "## Next"; echo "x"
   } >notes/tasks/feat--x.md
 }
+
+# install_stubs: ruff / pytest / diff-cover stand-ins first on PATH. They log their arguments to $STUB_LOG and
+# take their exit codes from STUB_RUFF_RC / STUB_PYTEST_RC / STUB_DC_RC (default 0).
+install_stubs() {
+  local bin="$TMP_ROOT/bin"
+  mkdir -p "$bin"
+  cat >"$bin/ruff" <<'EOF'
+#!/usr/bin/env bash
+echo "ruff $*" >>"$STUB_LOG"
+if [ "${STUB_RUFF_RC:-0}" -ne 0 ]; then echo "ruff: E501 line too long (stub)"; fi
+exit "${STUB_RUFF_RC:-0}"
+EOF
+  cat >"$bin/pytest" <<'EOF'
+#!/usr/bin/env bash
+echo "pytest $*" >>"$STUB_LOG"
+for a in "$@"; do case $a in --cov-report=xml:*) mkdir -p "$(dirname "${a#--cov-report=xml:}")"; echo "<coverage/>" >"${a#--cov-report=xml:}" ;; esac; done
+if [ "${STUB_PYTEST_RC:-0}" -ne 0 ]; then echo "1 failed (stub)"; fi
+exit "${STUB_PYTEST_RC:-0}"
+EOF
+  cat >"$bin/diff-cover" <<'EOF'
+#!/usr/bin/env bash
+echo "diff-cover $*" >>"$STUB_LOG"
+if [ "${STUB_DC_RC:-0}" -ne 0 ]; then echo "Failure. Coverage is 50%, below 90% (stub)"; fi
+exit "${STUB_DC_RC:-0}"
+EOF
+  chmod +x "$bin"/*
+  export PATH="$bin:$PATH"
+}
+
+# reset_stubs: empty the call log and clear the exit-code switches
+reset_stubs() {
+  export STUB_LOG="$TMP_ROOT/stub.log"
+  : >"$STUB_LOG"
+  unset STUB_RUFF_RC STUB_PYTEST_RC STUB_DC_RC
+}

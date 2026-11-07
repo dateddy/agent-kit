@@ -83,7 +83,7 @@ def child_env(extra: dict | None = None, force_cp1252: bool = False) -> dict:
 
 def run(cmd: list, cwd: Path, env: dict | None = None, force_cp1252: bool = False) -> tuple[int, str]:
     p = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
-                       env=child_env(env, force_cp1252), timeout=300)
+                       env=child_env(env, force_cp1252), timeout=300, stdin=subprocess.DEVNULL)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -487,6 +487,158 @@ def pl4(t: T):
     check(code == 0 and "Tests: test_a" in out and "Out of scope: none" in out, f"exit {code}: {out[:300]}")
     code, out = kit("pl", "template", cwd=d)
     check(code == 0 and "### Step 1:" in out and "- Contract:" in out, f"template: {out[:300]}")
+
+
+# ================================================================ guards (install --guards, scripts/*.sh)
+import contextlib
+import io
+import json
+import shutil
+
+
+def bash_exe() -> str:
+    """bash for direct calls: Git's on Windows (System32\\bash.exe is the WSL launcher), else PATH's."""
+    found = shutil.which("bash")
+    if os.name == "nt" and (not found or "system32" in found.lower()):
+        g = shutil.which("git")
+        cand = Path(g).resolve().parent.parent / "bin" / "bash.exe" if g else None
+        if cand and cand.exists():
+            return str(cand)
+    check(found is not None, "bash not found: the guards need bash, git and jq")
+    return found
+
+
+def need_jq() -> None:
+    check(shutil.which("jq") is not None, "jq not found: the guards need bash, git and jq")
+
+
+def guards_repo(t: T, name: str = "g", **kw) -> Path:
+    d = t.repo(name, **kw)
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    check(code == 0, f"install --guards exit {code}: {out[-400:]}")
+    return d
+
+
+def settings_of(d: Path, name: str = "settings.local.json") -> dict:
+    return json.loads((d / ".claude" / name).read_text(encoding="utf-8"))
+
+
+@scenario("G1", "install --guards: scripts copied, hooks in settings.local.json (not committed), pre-push block, no merge.ff without a TTY")
+def g1(t: T):
+    d = t.repo("g1")
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    check(code == 0, f"exit {code}: {out[-400:]}")
+    for n in ("lib.sh", "guard-git.sh", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push"):
+        f = d / ".agentkit/scripts" / n
+        check(f.is_file() and b"\r" not in f.read_bytes(), f"{n} missing or has CR")
+    hooks = settings_of(d)["hooks"]
+    check(set(hooks) == {"PreToolUse", "PostToolUse", "Stop"}, f"events: {sorted(hooks)}")
+    check(hooks["PreToolUse"][0]["matcher"] == "Bash" and "guard-git.sh" in hooks["PreToolUse"][0]["hooks"][0]["command"], "PreToolUse")
+    check(hooks["PostToolUse"][0]["matcher"] == "Edit|Write" and "ruff-fix.sh" in hooks["PostToolUse"][0]["hooks"][0]["command"], "PostToolUse")
+    check(hooks["Stop"][0]["hooks"][0]["command"].endswith("verify.sh\" --hook"), "Stop")
+    check(not (d / ".claude/settings.json").exists(), "team file written without --team")
+    excl = (d / ".git/info/exclude").read_text(encoding="utf-8")
+    check(".claude/settings.local.json" in excl, "settings.local.json not excluded from git")
+    gi = (d / ".gitignore").read_text(encoding="utf-8")
+    check(".agentkit/coverage.xml" in gi and ".coverage" in gi, f".gitignore: {gi!r}")
+    pp = (d / ".git/hooks/pre-push").read_text(encoding="utf-8")
+    check("# >>> agent-kit >>>" in pp and ".agentkit/scripts/pre-push" in pp, f"pre-push block missing: {pp!r}")
+    check("merge.ff" in out and "skip merge.ff (not interactive)" in out, f"merge.ff not explained: {out[-500:]}")
+    check(git(d, "config", "--local", "--get", "merge.ff").strip() == "", "merge.ff set without confirmation")
+    check((d / "FAILURES.md").is_file() and "## 20" not in (d / "FAILURES.md").read_text(encoding="utf-8"),
+          "FAILURES.md should hold the format header only")
+    ga = (d / ".gitattributes").read_text(encoding="utf-8")
+    check("FAILURES.md merge=union" in ga, f".gitattributes: {ga!r}")
+
+
+@scenario("G2", "install --guards merges into existing settings, never duplicates, and --team uses settings.json")
+def g2(t: T):
+    d = t.repo("g2")
+    mine = {"permissions": {"allow": ["Bash(ls)"]},
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}}
+    t.write(d, {".claude/settings.local.json": json.dumps(mine)})
+    for _ in range(2):
+        code, out = kit("install", str(d), "--guards", cwd=t.base)
+        check(code == 0, f"exit {code}: {out[-300:]}")
+    s = settings_of(d)
+    check(s["permissions"] == mine["permissions"], "permissions lost")
+    cmds = [h["command"] for g in s["hooks"]["Stop"] for h in g["hooks"]]
+    check(cmds[0] == "echo mine" and len(cmds) == 2, f"Stop hooks after two installs: {cmds}")
+    check("keep" in out and "already present" in out, f"second run should keep: {out[-300:]}")
+    e = t.repo("g2t")
+    code, out = kit("install", str(e), "--guards", "--team", cwd=t.base)
+    check(code == 0 and (e / ".claude/settings.json").is_file() and not (e / ".claude/settings.local.json").exists(),
+          f"--team: exit {code}: {out[-300:]}")
+    f = t.repo("g2bad")
+    t.write(f, {".claude/settings.local.json": "{ not json"})
+    code, out = kit("install", str(f), "--guards", cwd=t.base)
+    check(code == 2 and "left untouched" in out, f"invalid JSON: exit {code}: {out[-300:]}")
+    check((f / ".claude/settings.local.json").read_text(encoding="utf-8") == "{ not json", "invalid file was modified")
+
+
+@scenario("G3", "merge.ff is set only after an explicit yes; its effect is printed first")
+def g3(t: T):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("agentkit_install", SCRIPTS["install"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for answer, want in (("n", ""), ("", ""), ("y", "false")):
+        d = t.repo(f"ff{want or answer or 'blank'}")
+        with contextlib.redirect_stdout(io.StringIO()):  # the effect note is printed on every call
+            msg, code = mod.set_merge_ff(d, lambda a=answer: a)
+        got = git(d, "config", "--local", "--get", "merge.ff").strip()
+        check(got == want and code == 0, f"answer {answer!r}: merge.ff={got!r}, {msg}")
+    with contextlib.redirect_stdout(io.StringIO()):
+        msg, code = mod.set_merge_ff(d, lambda: "n")
+    check(msg.startswith("keep merge.ff=false"), f"already set: {msg}")
+
+
+@scenario("G4", "--uninstall-git-hooks removes the pre-push block and keeps an existing hook's own lines")
+def g4(t: T):
+    d = t.repo("g4")
+    hook = d / ".git/hooks/pre-push"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_bytes(b"#!/bin/sh\necho mine\n")
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    check(code == 0 and b"echo mine" in hook.read_bytes() and b"agent-kit" in hook.read_bytes(), f"block insert: {out[-300:]}")
+    code, out = kit("install", str(d), "--uninstall-git-hooks", cwd=t.base)
+    check(code == 0 and hook.read_bytes() == b"#!/bin/sh\necho mine\n", f"restore: {hook.read_bytes()!r} {out[-300:]}")
+
+
+@scenario("G5", "end to end: ff merge blocked by guard-git and pre-push, --no-ff pushes, out-of-plan file flagged by verify.sh")
+def g5(t: T):
+    need_jq()
+    bash = bash_exe()
+    d = guards_repo(t, "g5", files={"a.py": "x = 1\n"})
+    t.write(d, {".agentkit.json": json.dumps({"guards": {"ruff": False, "pytest": False, "diff_cover": False,
+                                                          "verify_on_push": False}})})
+    t.commit(d, "chore: install guards")
+    remote = t.sub("remote.git")
+    git(remote, "init", "-q", "--bare", "-b", "main")
+    git(d, "remote", "add", "origin", str(remote))
+    code, out = run(["git", "push", "origin", "main"], d)
+    check(code == 0, f"first push of main: {out[-300:]}")
+    git(d, "switch", "-q", "-c", "feat/x")
+    t.write(d, {
+        "notes/tasks/feat--x.plan.md": "# Plan: demo\nDone when: x\n\n### Step 1: edit a\n- Mode: solo\n- Files: a.py\n"
+                                       "- Contract: a stays\n- Tests: test_a\n- Out of scope: b.py\n",
+        "notes/tasks/feat--x.md": "# Task: demo\n- branch: feat/x\n\n## Plan\n- [ ] 1. edit a\n",
+        "a.py": "x = 2\n", "b.py": "y = 1\n"})
+    t.commit(d, "feat: edit a and b")
+    code, out = run([bash, ".agentkit/scripts/verify.sh"], d)
+    check(code == 1 and "Out-of-plan file: b.py. Log the reason in the decision log or revert." in out
+          and "a.py." not in out.replace("Out-of-plan file: b.py", ""), f"verify exit {code}: {out[-500:]}")
+    git(d, "switch", "-q", "main")
+    code, out = run([bash, ".agentkit/scripts/guard-git.sh", "git", "merge", "--ff-only", "feat/x"], d)
+    check(code == 1 and "git merge --no-ff" in out and "git log --first-parent --merges -5 main --oneline" in out,
+          f"guard-git exit {code}: {out[-400:]}")
+    git(d, "merge", "-q", "--ff-only", "feat/x")  # what the agent must not do
+    code, out = run(["git", "push", "origin", "main"], d)
+    check(code != 0 and "git merge --no-ff" in out, f"pre-push should reject the ff-merged main: exit {code}: {out[-400:]}")
+    git(d, "reset", "-q", "--hard", "origin/main")
+    git(d, "merge", "-q", "--no-ff", "feat/x", "-m", "feat(x): merge feature")
+    code, out = run(["git", "push", "origin", "main"], d)
+    check(code == 0, f"--no-ff merge should push: exit {code}: {out[-400:]}")
 
 
 # ================================================================ B4 dbg
