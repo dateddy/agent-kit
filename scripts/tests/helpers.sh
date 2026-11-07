@@ -49,8 +49,12 @@ commit_file() {
 write_cfg() { printf '%s\n' "$1" >.agentkit.json; }
 
 case_run() {
-  local name=$1 fn=$2
-  if ( set -e; mkrepo; "$fn" ) >"$TMP_ROOT/case.out" 2>&1; then
+  local name=$1 fn=$2 rc
+  # The subshell must not sit in an `if`/`&&`/`||` condition: bash ignores `set -e` there, and a failed
+  # assertion would then not abort the case.
+  ( set -e; mkrepo; "$fn" ) >"$TMP_ROOT/case.out" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
     PASSED=$((PASSED + 1))
     echo "PASS $name"
   else

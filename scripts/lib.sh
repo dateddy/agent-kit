@@ -47,11 +47,12 @@ protected_list() {
 # is_protected <branch>: glob match against git.protected_branches
 is_protected() {
   local pat
+  [ -n "${AK_PROT-}" ] || AK_PROT=$(protected_list)  # cached: each cfg call spawns jq
   while IFS= read -r pat; do
     [ -n "$pat" ] || continue
     # shellcheck disable=SC2254
     case $1 in $pat) return 0 ;; esac
-  done < <(protected_list)
+  done <<<"$AK_PROT"
   return 1
 }
 
