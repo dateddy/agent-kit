@@ -31,3 +31,4 @@ Entry format:
 - What happened: with the guards installed in a downstream repo, the agent edited `tools/install.py` in the agent-kit clone; the PostToolUse hook ran `ruff check --fix` and `ruff format` on it with ruff defaults (88 columns) and rewrote ~350 lines.
 - Root cause: `ruff-fix.sh` acted on every edited `.py` path the hook received, not only on files of its own repository.
 - Control: `ruff-fix.sh` exits 0 unless `git rev-parse --show-toplevel` of the file equals the repo's own top level; `scripts/tests/test_verify.sh` covers a loose file, a file in another repo and a file in a subfolder.
+- Follow-up (v0.4): generalise to every hook that writes files (`lib.sh` `in_repo`); see BACKLOG.md.
