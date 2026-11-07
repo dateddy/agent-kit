@@ -136,11 +136,13 @@ Constraints: không đổi API
 Done when: `a.py` exits 0
 Out of scope: web
 
-## 1. {VI}
-Files: a.py (new)
-Do: tạo a.py với hàm load()
-Verify: python a.py
-Done: exit 0
+### Step 1: {VI}
+- Mode: solo
+- Files: a.py (new)
+- Contract: tạo a.py với hàm load()
+- Tests: test_load
+- Out of scope: web
+- Verify: python a.py
 """
 
 
@@ -382,8 +384,11 @@ def b2b(t: T):
 # ================================================================ B3 decisions in plans, /grill
 def plan_with(decisions: str) -> str:
     return ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n"
-            f"Decisions: {decisions}\n\n## 1. Add a\nFiles: a.py (new)\nDo: create a.py\n"
-            "Verify: python a.py\nDone: exit 0\n")
+            f"Decisions: {decisions}\n\n### Step 1: Add a\n- Mode: solo\n- Files: a.py (new)\n"
+            "- Contract: create a.py\n- Tests: test_a\n- Out of scope: none\n- Verify: python a.py\n")
+
+OLD_PLAN = ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n\n"
+            "## 1. Add a\nFiles: a.py (new)\nDo: create a.py\nVerify: python a.py\nDone: exit 0\n")
 
 
 def new_id(out: str, prefix: str) -> str:
@@ -441,6 +446,47 @@ def b3d(t: T):
           "commands not installed")
     text = (d / ".agentkit/skills/grilling-designs/SKILL.md").read_text(encoding="utf-8")
     check("disable-model-invocation: true" in text, "frontmatter lost")
+
+
+# ================================================================ plan step format
+@scenario("PL1", "plan check: an old-format step WARNs (exit 2) and says how to migrate")
+def pl1(t: T):
+    d = t.repo()
+    t.write(d, {"plan.md": OLD_PLAN})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 2 and "old format" in out, f"exit {code}: {out[:300]}")
+
+
+@scenario("PL2", "plan check: new-format step needs Mode, Contract, Tests and Out of scope")
+def pl2(t: T):
+    d = t.repo()
+    bare = "# Plan: demo\nDone when: x exits 0\n\n### Step 1: Add a\n- Files: a.py (new)\n"
+    t.write(d, {"plan.md": bare})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 1, f"exit {code}: {out[:300]}")
+    for field in ("Mode", "Contract", "Tests", "Out of scope"):
+        check(f"missing '{field}:'" in out, f"{field} not reported: {out[:300]}")
+
+
+@scenario("PL3", "plan check: Mode must be solo or pipeline; 'no tests' WARNs")
+def pl3(t: T):
+    d = t.repo()
+    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Mode: solo", "Mode: duo")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 1 and "Mode must be" in out, f"exit {code}: {out[:300]}")
+    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Tests: test_a", "Tests: none")})
+    code, out = kit("pl", "check", "plan.md", cwd=d)
+    check(code == 2 and "no tests" in out, f"exit {code}: {out[:300]}")
+
+
+@scenario("PL4", "plan step N prints the new fields; template output is the new format")
+def pl4(t: T):
+    d = t.repo()
+    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "")})
+    code, out = kit("pl", "step", "1", "plan.md", cwd=d)
+    check(code == 0 and "Tests: test_a" in out and "Out of scope: none" in out, f"exit {code}: {out[:300]}")
+    code, out = kit("pl", "template", cwd=d)
+    check(code == 0 and "### Step 1:" in out and "- Contract:" in out, f"template: {out[:300]}")
 
 
 # ================================================================ B4 dbg

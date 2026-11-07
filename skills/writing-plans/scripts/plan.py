@@ -11,11 +11,16 @@ Plan file format (markdown):
   # Plan: <goal>
   Constraints: <...>          Done when: <...>          Out of scope: <...>
   Decisions: D-012, D-013     (optional; ids must exist in notes/decisions.md)
-  ## 1. <step title>
-  Files: src/a.py, tests/test_a.py (new)
-  Do: <what to change; may span lines>
-  Verify: <command that proves the step>
-  Done: <observable criterion>
+  ### Step 1: <step title>
+  - Mode: solo | pipeline
+  - Files: src/a.py, tests/test_a.py (new)
+  - Contract: <signatures, input/output, invariants; may span lines>
+  - Tests: test_a_ok, test_a_empty      (written before the code: the definition of done)
+  - Out of scope: <what must not be touched>
+  - Verify: <command that proves the step>      (optional)
+
+The Files / Tests / Out of scope fields are read by scripts/plan-step.sh and scripts/verify.sh (scope check).
+The old format (`## 1. title` with Files/Do/Verify/Done lines) is still read; `check` WARNs on it.
 
 Exit: 0 OK · 1 BLOCK · 2 WARN
 """
@@ -30,8 +35,17 @@ import sys
 from pathlib import Path
 
 OK, BLOCK, WARN = 0, 1, 2
-STEP_FIELDS = ("Files", "Do", "Verify", "Done")
+STEP_FIELDS = ("Files", "Do", "Verify", "Done")  # old format: all required
+NEW_FIELDS = ("Mode", "Files", "Contract", "Tests", "Out of scope", "Verify")  # Verify is optional
+NEW_REQUIRED = ("Mode", "Files", "Contract", "Tests", "Out of scope")
+ALL_STEP_FIELDS = tuple(dict.fromkeys(STEP_FIELDS + NEW_FIELDS))
+MODES = ("solo", "pipeline")
 HEAD_FIELDS = ("Constraints", "Done when", "Out of scope", "Decisions")
+STEP_NEW = re.compile(r"^###\s+Step\s+(\d+)\s*:\s*(.*)$")
+STEP_OLD = re.compile(r"^##\s+(\d+)\.\s*(.*)$")
+FIELD_LINE = re.compile(r"^(?:-\s+)?(Files|Do|Verify|Done when|Done|Constraints|Out of scope|Decisions|"
+                        r"Mode|Contract|Tests):\s*(.*)$")
+NO_TESTS = re.compile(r"(none|n/?a|-|—|không)", re.I)
 # A step longer than ~800 chars of instructions is usually 2+ steps in disguise
 MAX_DO_CHARS = 800
 # Beyond ~8 steps a plan is better split into separate tasks/branches
@@ -107,19 +121,24 @@ def parse(text: str) -> dict:
         if line.startswith("# Plan:"):
             plan["goal"] = line[7:].strip()
             continue
-        m = re.match(r"^##\s+(\d+)\.\s*(.*)$", line)
+        m = STEP_NEW.match(line) or STEP_OLD.match(line)
         if m:
-            cur = {"n": int(m[1]), "title": m[2].strip(), **{f: "" for f in STEP_FIELDS}}
+            fmt = "new" if line.startswith("###") else "old"
+            cur = {"n": int(m[1]), "title": m[2].strip(), "fmt": fmt, **{f: "" for f in ALL_STEP_FIELDS}}
             plan["steps"].append(cur)
             field = None
             continue
-        m = re.match(r"^(Files|Do|Verify|Done when|Done|Constraints|Out of scope|Decisions):\s*(.*)$", line)
+        if line.startswith("#"):  # any other heading ends the current step
+            cur, field = None, None
+            continue
+        m = FIELD_LINE.match(line)
         if m:
             key, val = m[1], m[2].strip()
+            allowed = None if cur is None else (NEW_FIELDS if cur["fmt"] == "new" else STEP_FIELDS)
             if cur is None and key in HEAD_FIELDS:
                 plan["head"][key] = val
                 field = ("head", key)
-            elif cur is not None and key in STEP_FIELDS:
+            elif cur is not None and key in allowed:
                 cur[key] = val
                 field = ("step", key)
             continue
@@ -170,21 +189,32 @@ def check_plan(path: Path, r: Path) -> tuple[int, dict | None]:
         tag = f"step {s['n']}"
         if s["n"] != i:
             errs.append(f"{tag}: numbering must be 1..N in order (expected {i})")
+        old = s["fmt"] == "old"
         if not s["title"]:
             errs.append(f"{tag}: missing title")
-        for f in STEP_FIELDS:
+        if old:
+            warns.append(f"{tag}: old format (Files/Do/Verify/Done) — rewrite as '### Step N: <title>' with "
+                         "Mode, Files, Contract, Tests, Out of scope (see `pl template`)")
+        for f in (STEP_FIELDS if old else NEW_REQUIRED):
             if not s[f].strip():
                 errs.append(f"{tag}: missing '{f}:'")
+        if not old:
+            mode = s["Mode"].strip().lower()
+            if mode and mode not in MODES:
+                errs.append(f"{tag}: Mode must be 'solo' or 'pipeline', got '{s['Mode'].strip()}'")
+            if s["Tests"].strip() and NO_TESTS.fullmatch(s["Tests"].strip()):
+                warns.append(f"{tag}: no tests — name the tests that define done, or say in Contract why none apply")
         for fp, new in split_files(s["Files"]):
             if any(c in fp for c in "*?"):
                 warns.append(f"{tag}: glob '{fp}' — list concrete files so the executor does not search")
             elif not new and not (r / fp).exists():
                 errs.append(f"{tag}: '{fp}' does not exist — fix the path or mark it '(new)'")
-        if len(s["Do"]) > MAX_DO_CHARS:
-            warns.append(f"{tag}: 'Do' is {len(s['Do'])} chars — split the step")
+        body_field = "Do" if old else "Contract"
+        if len(s[body_field]) > MAX_DO_CHARS:
+            warns.append(f"{tag}: '{body_field}' is {len(s[body_field])} chars — split the step")
         if s["Verify"] and MANUAL.search(s["Verify"]):
             warns.append(f"{tag}: manual verification — prefer a command (test, script, curl)")
-        if s["Done"] and VAGUE.search(s["Done"]) and not re.search(r"\d|`|==|returns|raises|exit", s["Done"]):
+        if old and s["Done"] and VAGUE.search(s["Done"]) and not re.search(r"\d|`|==|returns|raises|exit", s["Done"]):
             warns.append(f"{tag}: 'Done' is vague ('{VAGUE.search(s['Done'])[0]}') — state an observable result")
     for ln, line in enumerate(text.splitlines(), 1):
         if PLACEHOLDER.search(line):
@@ -204,8 +234,11 @@ def cmd_template(a, r):
     out = [f"# Plan: {a.goal or '<one-line outcome>'}", "Constraints: <what must not change / required tech>",
            "Done when: <observable result for the whole task>", "Out of scope: <deferred work>", ""]
     for i in range(1, n + 1):
-        out += [f"## {i}. <step title>", "Files: <path>, <path> (new)", "Do: <exact change: functions, signatures, behavior>",
-                "Verify: <command, e.g. python -m pytest tests/test_x.py -q>", "Done: <observable criterion>", ""]
+        out += [f"### Step {i}: <step title>", "- Mode: solo | pipeline", "- Files: <path>, <path> (new)",
+                "- Contract: <signatures, input/output, invariants>",
+                "- Tests: <test_name>, <test_name>",
+                "- Out of scope: <what must not be touched>",
+                "- Verify: <command, e.g. python -m pytest tests/test_x.py -q>", ""]
     print("\n".join(out).rstrip())
     return OK
 
@@ -261,8 +294,9 @@ def cmd_step(a, r):
     for k in ("Constraints", "Out of scope", "Decisions"):
         if plan["head"].get(k):
             print(f"{k}: {plan['head'][k]}")
-    for f in STEP_FIELDS:
-        print(f"{f}: {s[f]}")
+    for f in (STEP_FIELDS if s["fmt"] == "old" else NEW_FIELDS):
+        if s[f] or f in STEP_FIELDS or f in NEW_REQUIRED:
+            print(f"{f}: {s[f]}")
     return OK
 
 

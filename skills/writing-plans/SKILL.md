@@ -49,16 +49,25 @@ Done when: <observable result for the whole task>
 Out of scope: <deferred>
 Decisions: D-012, D-013        (optional: ids from a /grill session or nt decide)
 
-## 1. <step title>
-Files: src/x.py, tests/test_x.py (new)
-Do: <exact change: function names, signatures, behavior, edge cases>
-Verify: python -m pytest tests/test_x.py -q
-Done: <observable: value returned, test name passing, endpoint status>
+### Step 1: <step title>
+- Mode: solo | pipeline
+- Files: src/x.py, tests/test_x.py (new)
+- Contract: <signatures, input/output, invariants, edge cases>
+- Tests: test_x_ok, test_x_empty
+- Out of scope: <what must not be touched>
+- Verify: python -m pytest tests/test_x.py -q        (optional)
 ```
 
 `Decisions:` lists decision ids the plan relies on. `pl check` BLOCKs an id missing from `notes/decisions.md` and WARNs on a superseded one (it names the replacement). Do not re-ask the user about a listed decision.
 
-Step rules: 2–8 steps; each step leaves the code working and verifiable; tests in the same step as the behavior they cover; real paths only (`(new)` for files to create); `Done` is observable, never "works correctly".
+Step rules: 2–8 steps; each step leaves the code working and verifiable; real paths only (`(new)` for files to create); `Mode`, `Files`, `Contract`, `Tests` and `Out of scope` are required (one line each, extra lines indented).
+- `Tests` names the tests that define done. **Write them before the code**; the step is finished when exactly those pass. Name them concretely (`test_drops_null_rows`), never "add tests".
+- `Files` is a contract: `verify.sh` fails any changed file outside the `Files` of steps 1..active unless a decision in `notes/decisions.md` logs why. List every file the step touches, tests included.
+- The old `## 1.` / Do / Done format still parses; `pl check` WARNs on it. Write new plans in the format above.
+
+## Where the active step lives
+
+The accepted plan is `pl path` (`notes/tasks/<branch>.plan.md`). The active step is the first unchecked item of the task note's `## Plan` checklist (`nt task --check N` ticks them); with every item ticked it is the last step. Scripts read it with `scripts/plan-step.sh <field>` (`files`, `tests`, `mode`, `contract`, `out-of-scope`, `verify`, `title`; `--cumulative` for steps 1..active). There is no second marker to maintain: tick the step with `nt` as you finish it.
 
 ## After the user accepts (executor, write mode)
 
@@ -67,7 +76,7 @@ Step rules: 2–8 steps; each step leaves the code working and verifiable; tests
 - [ ] 2. Save the accepted plan verbatim to the path from `pl path`
 - [ ] 3. pl check   → fix BLOCKs (wrong paths, placeholders); report WARNs to the user
 - [ ] 4. pl apply   → loads steps into the task note
-- [ ] 5. For each step N:  pl step N → implement → run its Verify (or vf)
+- [ ] 5. For each step N:  pl step N → write its Tests first (they fail) → implement → run its Verify (or vf)
                          → nt task --check N --done "…" --next "…" → commit
 ```
 
