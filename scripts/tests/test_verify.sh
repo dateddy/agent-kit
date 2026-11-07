@@ -282,6 +282,22 @@ t_ruff_fix_runs_on_the_edited_py_file_only() {
   assert_eq 2 "$(grep -c . "$STUB_LOG")" "exactly two ruff calls, both for m.py"
 }
 
+t_ruff_fix_skips_files_outside_this_repo() {
+  setup
+  outside=$(mktemp -d "$TMP_ROOT/outside.XXXXXX")
+  echo "x=1" >"$outside/loose.py"
+  rf "$outside/loose.py"
+  assert_eq 0 "$RC" "rc"; assert_eq "" "$(cat "$STUB_LOG")" "ruff not called outside any repo"
+  other=$(mktemp -d "$TMP_ROOT/other.XXXXXX")
+  git -C "$other" init -q
+  echo "x=1" >"$other/theirs.py"
+  rf "$other/theirs.py"
+  assert_eq 0 "$RC" "rc"; assert_eq "" "$(cat "$STUB_LOG")" "ruff not called in another repo"
+  mkdir -p sub; echo "x=1" >sub/mine.py
+  rf "$PWD/sub/mine.py"
+  assert_contains "$(cat "$STUB_LOG")" "mine.py" "a file in a subfolder of this repo is still fixed"
+}
+
 t_ruff_fix_ignores_other_files() {
   setup
   echo "# x" >README.md
@@ -334,5 +350,6 @@ case_run "--stages wins; unknown names fail" t_stages_flag_wins_and_unknown_fail
 case_run "guards.<key>=false wins over selection" t_disabled_stage_stays_off_when_selected
 case_run "ruff-fix touches only the edited .py file" t_ruff_fix_runs_on_the_edited_py_file_only
 case_run "ruff-fix ignores other files" t_ruff_fix_ignores_other_files
+case_run "ruff-fix skips files outside this repo" t_ruff_fix_skips_files_outside_this_repo
 case_run "ruff-fix reports leftovers and a missing tool" t_ruff_fix_reports_leftovers_and_missing_tool
 finish

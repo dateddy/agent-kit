@@ -19,7 +19,8 @@
                                                         .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git,
                                                         PostToolUse ruff-fix, Stop verify) into .claude/settings.local.json
                                                         (--team: .claude/settings.json), adds a pre-push git hook block, and
-                                                        offers `git config merge.ff false` after printing its effect
+                                                        offers `git config merge.ff false` after printing its effect;
+                                                        exits 1 before writing anything if bash cannot find jq
 
 Project install does:
   <repo>/.agentkit/skills/<skill>   canonical copy, agent-neutral (referenced by AGENTS.md)
@@ -47,6 +48,11 @@ HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
 GUARD_SCRIPTS = ("lib.sh", "guard-git.sh", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
 GUARD_IGNORE = (".agentkit/coverage.xml", ".coverage")  # written by verify.sh
+# bash fails on CR: with core.autocrlf=true git would check the scripts out with CRLF
+GUARD_EOL = ".agentkit/scripts/** text eol=lf"
+JQ_HINT = ("install jq (https://jqlang.org/download/): Windows `winget install jqlang.jq` (winget may not put it on\n"
+           "  PATH; copy jq.exe into ~/bin or add its folder to PATH), macOS `brew install jq`, Debian/Ubuntu\n"
+           "  `sudo apt install jq`. Check with: bash -c 'command -v jq'")
 ALL_SKILLS = {p.name: p for p in sorted((KIT / "skills").iterdir()) if (p / "SKILL.md").exists()}
 CORE = ("writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context")
 OPTIONAL = {"experiments": "tracking-experiments", "prompts": "crafting-prompts",
@@ -389,6 +395,32 @@ def set_merge_ff(repo: Path, ask=None) -> tuple[str, int]:
     return "set merge.ff=false in .git/config", 0
 
 
+def find_bash() -> str | None:
+    """bash the guards will run under: Git's on Windows (System32\\bash.exe is the WSL launcher), else PATH's."""
+    found = shutil.which("bash")
+    if os.name == "nt" and (not found or "system32" in found.lower()):
+        g = shutil.which("git")
+        cand = Path(g).resolve().parent.parent / "bin" / "bash.exe" if g else None
+        if cand and cand.exists():
+            return str(cand)
+    return found
+
+
+def guard_prereqs(jq: str = "jq") -> str | None:
+    """None when bash, git and jq are usable the way the hooks call them (non-login bash); else the reason."""
+    if shutil.which("git") is None:
+        return "git not found: the guards need bash, git and jq"
+    bash = find_bash()
+    if bash is None:
+        return "bash not found: the guards need bash, git and jq (on Windows: Git for Windows' bash)"
+    r = subprocess.run([bash, "-c", f"command -v {shlex.quote(jq)}"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=CHILD_ENV)
+    if r.returncode != 0 or not r.stdout.strip():
+        return (f"{jq} not found by {bash}: every guard script needs it, and without it the PreToolUse hook would "
+                f"block every Bash call.\n  {JQ_HINT}")
+    return None
+
+
 def install_guards(repo: Path, team: bool, ask=None) -> int:
     code = 0
     print(copy_guard_scripts(repo))
@@ -404,6 +436,8 @@ def install_guards(repo: Path, team: bool, ask=None) -> int:
             path.parent.mkdir(parents=True, exist_ok=True)
             if append_lines(path, [".claude/settings.local.json"]):
                 print(f"exclude .claude/settings.local.json in {path} (personal, not committed)")
+    if append_lines(repo / ".gitattributes", [GUARD_EOL]):
+        print(f"update {repo / '.gitattributes'} ({GUARD_EOL}; then: git add --renormalize .agentkit/scripts)")
     if append_lines(repo / ".gitignore", GUARD_IGNORE):
         print(f"update {repo / '.gitignore'} ({', '.join(GUARD_IGNORE)})")
     d = hooks_dir(repo)
@@ -478,6 +512,11 @@ def main() -> int:
     repo = Path(a.repo).resolve()
     if not repo.is_dir():
         sys.exit(f"not a directory: {repo}")
+    if a.guards:  # before anything is written: half-installed guards without jq would block every Bash call
+        why = guard_prereqs()
+        if why:
+            print(f"BLOCK: {why}\nNothing was installed. Re-run with --guards once it is fixed, or drop --guards.")
+            return 1
     if a.uninstall_git_hooks:
         return git_hooks(repo, uninstall_git_hook, (*HOOK_CALLS, "pre-push"))
 
