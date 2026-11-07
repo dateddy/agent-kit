@@ -3,6 +3,7 @@
 #
 # Exit-code convention:
 #   default   : plain CLI / git hook. 0 = every enabled stage passed, 1 = a stage failed.
+#   --push    : called by pre-push. Same exit codes as the default; selects guards.push_stages.
 #   --hook    : Claude Code Stop hook. 0 = pass, 2 = fail (exit 2 stops Claude from finishing and feeds
 #               stderr back to it; exit 1 would not block). Stdin (the hook JSON) is drained and ignored:
 #               Claude Code itself overrides a Stop block after 8 in a row, so no stop_hook_active logic here.
@@ -14,13 +15,24 @@
 #   tests       pytest --cov --cov-report=xml:<guards.coverage_xml>  guards.pytest     guards.pytest_cmd, guards.pytest_args
 #   diff-cover  coverage of changed lines vs the base branch         guards.diff_cover guards.diff_cover_cmd, guards.fail_under
 #   scope       changed files vs the Files: of plan steps 1..active  guards.scope      guards.scope_ignore
+# Which stages run (names: lint, tests, diff-cover, scope; comma or newline separated):
+#   --stages <list>  wins; else guards.hook_stages with --hook, guards.push_stages with --push;
+#   else every stage. A stage not selected is reported as SKIP; an unknown name is an error.
+#   guards.<key>=false still switches a stage off everywhere.
 # A missing tool fails its stage with a message; it never passes silently. The scope stage is skipped
 # when the branch has no plan (lite path). Commands are split on spaces (no quoting inside the config value).
 set -u
-HOOK=0
-usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 1; }
-for a in "$@"; do
-  case $a in --hook) HOOK=1 ;; *) usage ;; esac
+HOOK=0 PUSH=0 STAGES_ARG="" STAGES_SET=0
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 1; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    --hook) HOOK=1 ;;
+    --push) PUSH=1 ;;
+    --stages) [ $# -ge 2 ] || usage; STAGES_ARG=$2; STAGES_SET=1; shift ;;
+    --stages=*) STAGES_ARG=${1#--stages=}; STAGES_SET=1 ;;
+    *) usage ;;
+  esac
+  shift
 done
 if [ "$HOOK" = 1 ]; then AK_FAIL=2; FAIL_RC=2; else AK_FAIL=1; FAIL_RC=1; fi
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -35,6 +47,20 @@ trap 'rm -rf "$TMP"' EXIT
 BASE=$(base_ref)
 BRANCH=$(current_branch || true)
 XML=$(cfg guards.coverage_xml .agentkit/coverage.xml)
+
+# ---------------------------------------------------------------- stage selection
+ALL_STAGES="lint tests diff-cover scope"
+if [ "$STAGES_SET" = 1 ]; then SEL_RAW=$STAGES_ARG; SEL_SRC="--stages"
+elif [ "$HOOK" = 1 ]; then SEL_RAW=$(cfg guards.hook_stages ""); SEL_SRC="guards.hook_stages"
+elif [ "$PUSH" = 1 ]; then SEL_RAW=$(cfg guards.push_stages ""); SEL_SRC="guards.push_stages"
+else SEL_RAW=""; SEL_SRC=""; fi
+SELECTED=$(printf '%s\n' "$SEL_RAW" | tr ', \r' '\n\n\n' | awk 'NF')
+[ "$STAGES_SET" = 1 ] && [ -z "$SELECTED" ] && ak_fail "verify.sh: --stages needs at least one of: $ALL_STAGES"
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
+  case " $ALL_STAGES " in *" $s "*) ;; *) ak_fail "verify.sh: unknown stage '$s' in $SEL_SRC (choose from: $ALL_STAGES)" ;; esac
+done <<<"$SELECTED"
+selected() { [ -z "$SELECTED" ] || printf '%s\n' "$SELECTED" | grep -qx -- "$1"; }
 
 # ---------------------------------------------------------------- changed files
 ignore_patterns() {
@@ -163,6 +189,7 @@ run_stage() { # <cfg key> <stage name> <function>
   local key=$1 name=$2 fn=$3 out="$TMP/$2.out" rc
   NAMES+=("$name"); DETAILS+=("$out"); NOTE=""
   if ! cfg_on "guards.$key" true; then STATUS+=(SKIP); NOTES+=("disabled: guards.$key=false"); return; fi
+  if ! selected "$name"; then STATUS+=(SKIP); NOTES+=("not selected ($SEL_SRC)"); return; fi
   "$fn" "$out"; rc=$?
   [ "$name" = tests ] && TESTS_RC=$rc
   case $rc in

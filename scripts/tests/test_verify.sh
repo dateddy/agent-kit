@@ -199,6 +199,71 @@ t_not_a_repo_hook_is_quiet_cli_fails() {
   assert_eq 1 "$RC" "cli says so"; assert_contains "$ERR" "not inside a git repository" "message"
 }
 
+t_stages_flag_selects_stages() {
+  setup; make_plan
+  change src/a.py
+  run bash "$V" --stages lint,scope
+  assert_eq 0 "$RC" "rc: $ERR"
+  log=$(cat "$STUB_LOG")
+  assert_contains "$log" "ruff check" "lint ran"
+  assert_not_contains "$log" "pytest" "tests not run"
+  assert_not_contains "$log" "diff-cover" "diff-cover not run"
+  assert_contains "$ERR" "tests       SKIP  not selected (--stages)" "summary says why"
+  assert_contains "$ERR" "scope       PASS" "scope ran"
+}
+
+t_hook_stages_from_config() {
+  setup; make_plan
+  change src/a.py
+  write_cfg '{"guards":{"hook_stages":["lint","scope"],"push_stages":["tests","diff-cover"]}}'
+  run bash "$V" --hook </dev/null
+  assert_eq 0 "$RC" "rc: $ERR"
+  log=$(cat "$STUB_LOG")
+  assert_contains "$log" "ruff check" "lint ran"
+  assert_not_contains "$log" "pytest" "tests not run in hook mode"
+  assert_contains "$ERR" "diff-cover  SKIP  not selected (guards.hook_stages)" "summary"
+}
+
+t_push_stages_from_config() {
+  setup; make_plan
+  change src/other.py
+  write_cfg '{"guards":{"hook_stages":["lint","scope"],"push_stages":["tests","diff-cover"]}}'
+  run bash "$V" --push
+  assert_eq 0 "$RC" "out-of-plan file ignored: scope not selected for push: $ERR"
+  log=$(cat "$STUB_LOG")
+  assert_not_contains "$log" "ruff" "lint not run on push"
+  assert_contains "$log" "pytest --cov" "tests ran"
+  assert_contains "$log" "diff-cover" "diff-cover ran"
+  run bash "$V"
+  assert_eq 1 "$RC" "plain CLI ignores both lists and runs every stage"
+}
+
+t_stages_flag_wins_and_unknown_fails() {
+  setup; make_plan
+  change src/a.py
+  write_cfg '{"guards":{"hook_stages":["tests"]}}'
+  run bash "$V" --hook --stages=lint </dev/null
+  assert_eq 0 "$RC" "rc: $ERR"
+  assert_not_contains "$(cat "$STUB_LOG")" "pytest" "--stages beats hook_stages"
+  run bash "$V" --stages lint,coverage
+  assert_eq 1 "$RC" "unknown stage is an error"
+  assert_contains "$ERR" "unknown stage 'coverage' in --stages" "message"
+  write_cfg '{"guards":{"hook_stages":"lint, typo"}}'
+  run bash "$V" --hook </dev/null
+  assert_eq 2 "$RC" "typo in config blocks in hook mode, never a silent pass"
+  run bash "$V" --stages ""
+  assert_eq 1 "$RC" "empty --stages is an error"
+}
+
+t_disabled_stage_stays_off_when_selected() {
+  setup; make_plan
+  change src/a.py
+  write_cfg '{"guards":{"pytest":false}}'
+  run bash "$V" --stages tests,lint
+  assert_eq 0 "$RC" "rc"
+  assert_contains "$ERR" "tests       SKIP  disabled: guards.pytest=false" "switch wins over selection"
+}
+
 # ---- ruff-fix.sh
 rf() { # <file_path>
   jq -nc --arg p "$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' >"$TMP_ROOT/in.json"
@@ -215,6 +280,22 @@ t_ruff_fix_runs_on_the_edited_py_file_only() {
   case $log in *"ruff check --fix --quiet "*"m.py"*) ;; *) echo "no check --fix on m.py: $log" >&2; return 1 ;; esac
   case $log in *"ruff format --quiet "*"m.py"*) ;; *) echo "no format on m.py: $log" >&2; return 1 ;; esac
   assert_eq 2 "$(grep -c . "$STUB_LOG")" "exactly two ruff calls, both for m.py"
+}
+
+t_ruff_fix_skips_files_outside_this_repo() {
+  setup
+  outside=$(mktemp -d "$TMP_ROOT/outside.XXXXXX")
+  echo "x=1" >"$outside/loose.py"
+  rf "$outside/loose.py"
+  assert_eq 0 "$RC" "rc"; assert_eq "" "$(cat "$STUB_LOG")" "ruff not called outside any repo"
+  other=$(mktemp -d "$TMP_ROOT/other.XXXXXX")
+  git -C "$other" init -q
+  echo "x=1" >"$other/theirs.py"
+  rf "$other/theirs.py"
+  assert_eq 0 "$RC" "rc"; assert_eq "" "$(cat "$STUB_LOG")" "ruff not called in another repo"
+  mkdir -p sub; echo "x=1" >sub/mine.py
+  rf "$PWD/sub/mine.py"
+  assert_contains "$(cat "$STUB_LOG")" "mine.py" "a file in a subfolder of this repo is still fixed"
 }
 
 t_ruff_fix_ignores_other_files() {
@@ -262,7 +343,13 @@ case_run "failing tests: diff-cover skipped" t_failing_tests_skip_diff_cover
 case_run "diff-cover failure; fail_under and xml path from config" t_diff_cover_failure_and_threshold_config
 case_run "lint failure shows ruff output" t_lint_failure
 case_run "outside a repo: hook quiet, cli fails" t_not_a_repo_hook_is_quiet_cli_fails
+case_run "--stages runs only the listed stages" t_stages_flag_selects_stages
+case_run "--hook uses guards.hook_stages" t_hook_stages_from_config
+case_run "--push uses guards.push_stages; plain CLI runs all" t_push_stages_from_config
+case_run "--stages wins; unknown names fail" t_stages_flag_wins_and_unknown_fails
+case_run "guards.<key>=false wins over selection" t_disabled_stage_stays_off_when_selected
 case_run "ruff-fix touches only the edited .py file" t_ruff_fix_runs_on_the_edited_py_file_only
 case_run "ruff-fix ignores other files" t_ruff_fix_ignores_other_files
+case_run "ruff-fix skips files outside this repo" t_ruff_fix_skips_files_outside_this_repo
 case_run "ruff-fix reports leftovers and a missing tool" t_ruff_fix_reports_leftovers_and_missing_tool
 finish

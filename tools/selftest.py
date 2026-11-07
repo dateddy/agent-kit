@@ -549,6 +549,42 @@ def g1(t: T):
           "FAILURES.md should hold the format header only")
     ga = (d / ".gitattributes").read_text(encoding="utf-8")
     check("FAILURES.md merge=union" in ga, f".gitattributes: {ga!r}")
+    check(".agentkit/scripts/** text eol=lf" in ga, f"eol=lf rule for the guard scripts missing: {ga!r}")
+    git(d, "config", "core.autocrlf", "true")
+    git(d, "add", ".agentkit/scripts", ".gitattributes")
+    git(d, "commit", "-q", "-m", "chore: add guards")
+    (d / ".agentkit/scripts/verify.sh").unlink()
+    git(d, "checkout", "--", ".agentkit/scripts/verify.sh")
+    check(b"\r" not in (d / ".agentkit/scripts/verify.sh").read_bytes(), "autocrlf checkout put CR into verify.sh")
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    ga2 = (d / ".gitattributes").read_text(encoding="utf-8")
+    check(code == 0 and ga2.count("text eol=lf") == 1, f"re-run duplicated the eol rule or failed: {ga2!r}")
+
+
+@scenario("G6", "install --guards without jq: exit 1 with install hints, nothing written")
+def g6(t: T):
+    import importlib.util
+    import contextlib
+    import io
+    spec = importlib.util.spec_from_file_location("agentkit_install_g6", SCRIPTS["install"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    check(mod.guard_prereqs() is None, "jq is installed here, yet guard_prereqs() complains")
+    why = mod.guard_prereqs(jq="no-such-jq-agentkit")
+    check(why is not None and "no-such-jq-agentkit not found" in why and "winget install jqlang.jq" in why, f"message: {why}")
+    d = t.repo("g6")
+    mod.guard_prereqs = lambda: "jq not found by bash: test"
+    argv, sys.argv = sys.argv, ["install.py", str(d), "--guards"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = mod.main()
+    finally:
+        sys.argv = argv
+    out = buf.getvalue()
+    check(code == 1 and "BLOCK: jq not found" in out and "Nothing was installed" in out, f"exit {code}: {out}")
+    check(not (d / ".agentkit").exists() and not (d / ".claude").exists() and not (d / "AGENTS.md").exists(),
+          "files were written before the jq check")
 
 
 @scenario("G2", "install --guards merges into existing settings, never duplicates, and --team uses settings.json")

@@ -30,7 +30,7 @@ All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAM
 12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
 13. [Changelog v3](#13-changelog-v3)
 14. [Guards: scripts that always run (v0.3.0)](#14-guards-scripts-that-always-run-v030)
-15. [Changelog v0.3.0](#15-changelog-v030)
+15. [Changelog v0.3.1 / v0.3.0](#15-changelog-v031--v030)
 
 ---
 
@@ -57,7 +57,7 @@ agent-kit/
 ├── .github/workflows/         selftest.yml: 3 OSes x Python 3.9/3.13
 ├── .agentkit.example.json     default configuration
 ├── FAILURES.md                log of corrected agent mistakes and the control that now prevents each
-└── VERSION                    0.3.0
+└── VERSION                    0.3.1
 ```
 
 Token cost is layered (progressive disclosure):
@@ -78,7 +78,10 @@ git clone <this repo> agent-kit
 python agent-kit/tools/install.py path/to/your-project                       # the five core skills
 python agent-kit/tools/install.py path/to/your-project --with experiments,prompts   # plus optional skills
 python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus enforcement by git hooks
+python agent-kit/tools/install.py path/to/your-project --guards              # plus the bash guards (needs jq)
 ```
+
+**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. See [Guards](#14-guards-scripts-that-always-run-v030).
 
 **Core and optional skills.** The default install is small on purpose: every installed skill costs its description in every session.
 
@@ -698,7 +701,7 @@ The selftest runs all of this against a fake `claude` on `PATH` that emits canne
 
 Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are plain bash scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none (a human at a terminal).
 
-**Requirements:** `bash`, `git`, `jq` (on Windows: Git for Windows' bash). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
+**Requirements:** `bash`, `git`, `jq` (on Windows: Git for Windows' bash). `jq` is a hard prerequisite: every guard reads `.agentkit.json` with it, and without it the `PreToolUse` hook would block every Bash call, so `install.py --guards` checks `bash -c 'command -v jq'` first and exits 1 without writing anything when it is missing. Install it with `winget install jqlang.jq` (Windows; winget may not put it on PATH: copy `jq.exe` into `~/bin` or add its folder to PATH), `brew install jq` (macOS) or `sudo apt install jq` (Debian/Ubuntu). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
 
 **Two real failures these exist for** (details and the control for each: [FAILURES.md](FAILURES.md)):
 
@@ -713,9 +716,9 @@ Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards 
 |---|---|---|
 | `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | On a protected branch: **blocks** `git merge` without `--no-ff`, any `--ff-only`, any `--squash` (`--abort/--continue/--quit` pass). A `git commit`, or a push that targets a protected branch, returns `permissionDecision: "ask"` so you approve. Follows `git switch/checkout` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes and `bash -c`. The block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
 | `pre-push` | git (any agent, or none) | For a push to a protected branch every commit on the pushed range's **first-parent line** must be a merge commit (≥ 2 parents), so a fast-forwarded feature branch is refused. Handles a new branch on the remote; deletes and tags are not judged; the first push to a remote with no branches is let through. Then runs `verify.sh` |
-| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push`, by hand | The single "is this done?" gate, see below |
+| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push` (`--push`), by hand | The single "is this done?" gate, see below; `--stages`, `guards.hook_stages` and `guards.push_stages` pick which stages run per caller |
 | `plan-step.sh <field>` | `verify.sh`, the agent | Prints a field of the active plan step (`title mode files contract tests out-of-scope verify`); `--cumulative` for steps 1..active; a missing field, step or plan is an error |
-| `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only; anything else is a no-op. Problems it cannot fix are shown to the agent |
+| `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only, and only when it belongs to this repository (a file in another repo or outside any repo is left alone); anything else is a no-op. Problems it cannot fix are shown to the agent |
 | `lib.sh` | sourced | Config reading (`jq` on `.agentkit.json`), protected-branch matching, base branch, slug |
 
 **`verify.sh` stages, in order** (each can be switched off, see [Configuration](#configuration-guards)):
@@ -755,7 +758,7 @@ python agent-kit/tools/install.py path/to/repo --uninstall-git-hooks   # also re
 | `.agentkit/scripts/` | copied; leave it uncommitted for a trial | copied; commit it |
 | `pre-push` git hook | `.git/hooks/pre-push` (always local to the clone) | same |
 
-Both: existing settings are **merged, never overwritten** (a hook already present is not added twice; a settings file that is not valid JSON is left untouched with exit 2 and a hint). An existing `pre-push` hook is kept: the kit's block is inserted after its shebang, and it hands git's ref lines on to the hook that follows. `.agentkit/coverage.xml` and `.coverage` are added to `.gitignore`. A header-only `FAILURES.md` is created if missing (with `merge=union`, like the decision log).
+Both: `.gitattributes` gets `.agentkit/scripts/** text eol=lf`, so `core.autocrlf=true` never checks the scripts out with CRLF (bash fails on CR); after adding it to an existing repo run `git add --renormalize .agentkit/scripts`. Existing settings are **merged, never overwritten** (a hook already present is not added twice; a settings file that is not valid JSON is left untouched with exit 2 and a hint). An existing `pre-push` hook is kept: the kit's block is inserted after its shebang, and it hands git's ref lines on to the hook that follows. `.agentkit/coverage.xml` and `.coverage` are added to `.gitignore`. A header-only `FAILURES.md` is created if missing (with `merge=union`, like the decision log).
 
 **`merge.ff`:** the installer prints what `git config merge.ff false` does (it writes this clone's `.git/config` only, and makes every `git merge`/`git pull` in the clone create a merge commit instead of fast-forwarding, including `git pull` on a feature branch) and asks `[y/N]`. Without an interactive terminal it changes nothing and prints the command.
 
@@ -784,6 +787,7 @@ The plan lives at `pl path` (`notes/tasks/<branch>.plan.md`). The **active step*
 | Key | Default | Meaning |
 |---|---|---|
 | `ruff` / `pytest` / `diff_cover` / `scope` | `true` | `false` skips that `verify.sh` stage (and `ruff-fix.sh` for `ruff`) |
+| `hook_stages` / `push_stages` | `null` (all) | Stages `verify.sh` runs from the Claude Code `Stop` hook (`--hook`) / from `pre-push` (`--push`), e.g. `["lint", "scope"]` and `["tests", "diff-cover"]`. Names: `lint`, `tests`, `diff-cover`, `scope`; an unknown name is an error. `verify.sh --stages a,b` overrides both; a plain `verify.sh` runs every enabled stage |
 | `ruff_cmd` / `pytest_cmd` / `diff_cover_cmd` | `ruff` / `pytest` / `diff-cover` | Command, split on spaces (e.g. `python -m pytest`); no quoting inside |
 | `pytest_args` | `""` | Extra pytest arguments, e.g. `--cov=src` |
 | `coverage_xml` | `.agentkit/coverage.xml` | Where the coverage report is written and read |
@@ -824,7 +828,19 @@ python tools/selftest.py            # includes the installer and an end-to-end g
 
 The bash tests build throwaway git repos, put stub `ruff`/`pytest`/`diff-cover` first on `PATH`, and use real `git push` into a bare remote for `pre-push`. No bats needed. CI runs both on Ubuntu, Windows and macOS.
 
-## 15. Changelog v0.3.0
+## 15. Changelog v0.3.1 / v0.3.0
+
+### v0.3.1
+
+**Added**
+- `verify.sh --stages <list>` and `--push`; `guards.hook_stages` (Stop hook) and `guards.push_stages` (`pre-push`) pick which stages each caller runs, e.g. lint + scope on every turn, tests + diff-cover before a push. Unknown names fail.
+- `install.py --guards` checks that bash finds `jq` before writing anything, and exits 1 with install hints if not. `jq` is documented as a prerequisite in [Install](#2-install).
+
+**Fixed**
+- The installer writes `.agentkit/scripts/** text eol=lf` to `.gitattributes`: with `core.autocrlf=true` git checked the scripts out with CRLF and bash failed on them.
+- `ruff-fix.sh` no longer formats `.py` files outside the repository it is installed in (it reformatted another project's file with ruff defaults).
+
+### v0.3.0
 
 The kit's first versioned release (`VERSION`); it follows the unversioned "v3" above.
 

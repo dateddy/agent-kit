@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ruff-fix.sh - Claude Code PostToolUse hook (matcher Edit|Write): `ruff check --fix` and `ruff format`
-# on the one .py file that was just edited. Anything else is a no-op.
+# on the one .py file that was just edited, if it belongs to this repository. Anything else is a no-op:
+# a file in another repo or outside any repo follows that project's own formatting rules, not ours.
 #
 # Exit-code convention (Claude Code PostToolUse hook): 0 = done or nothing to do; 2 = stderr is shown to
 # Claude (the edit already happened, so this reports what could not be fixed or that ruff is missing).
@@ -17,6 +18,8 @@ file=${file//\\//}  # Windows paths from the hook JSON
 case $file in *.py) ;; *) exit 0 ;; esac
 cfg_on guards.ruff true || exit 0
 [ -f "$file" ] || exit 0
+top=$(git -C "$(dirname "$file")" rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ "$top" = "$(git rev-parse --show-toplevel 2>/dev/null)" ] || exit 0
 
 read -r -a R <<<"$(cfg guards.ruff_cmd ruff)"
 need "${R[0]}" ruff
