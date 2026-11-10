@@ -413,7 +413,7 @@ def decided_repo(t: T, supersede: bool = False) -> tuple[Path, str, str]:
 
 
 @scenario("DC1", "plan check: an existing Decisions id passes")
-def b3a(t: T):
+def dc1(t: T):
     d, first, _ = decided_repo(t)
     t.write(d, {"plan.md": plan_with(first)})
     code, out = kit("pl", "check", "plan.md", cwd=d)
@@ -421,7 +421,7 @@ def b3a(t: T):
 
 
 @scenario("DC2", "plan check: a missing Decisions id BLOCKs")
-def b3b(t: T):
+def dc2(t: T):
     d, first, _ = decided_repo(t)
     t.write(d, {"plan.md": plan_with(f"{first}, D-099")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
@@ -429,7 +429,7 @@ def b3b(t: T):
 
 
 @scenario("DC3", "plan check: a superseded Decisions id WARNs and names the replacement")
-def b3c(t: T):
+def dc3(t: T):
     d, first, second = decided_repo(t, supersede=True)
     t.write(d, {"plan.md": plan_with(first)})
     code, out = kit("pl", "check", "plan.md", cwd=d)
@@ -437,7 +437,7 @@ def b3c(t: T):
 
 
 @scenario("DC4", "install copies the grilling-designs skill and /grill command")
-def b3d(t: T):
+def dc4(t: T):
     d = t.repo()
     code, out = kit("install", str(d), "--with", "grill", cwd=t.base)
     check(code == 0, f"install exit {code}: {out[:300]}")
@@ -490,10 +490,8 @@ def pl4(t: T):
 
 
 # ================================================================ guards (install --guards, scripts/*.sh)
-import contextlib
-import io
-import json
-import shutil
+import contextlib  # noqa: E402  (the guards section keeps its imports next to it)
+import io  # noqa: E402  (same)
 
 
 def bash_exe() -> str:
