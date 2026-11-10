@@ -251,3 +251,138 @@ def glob_match(pattern: str, text: str) -> bool:
         return re.fullmatch("".join(out), text, re.S) is not None
     except re.error:
         return False
+
+
+# ---------------------------------------------------------------- decisions and the command walker
+MAX_DEPTH = 3  # how many levels of `bash -c` / `eval` are looked into
+
+_ENV_ASSIGN = re.compile(r"[A-Za-z_].*=", re.S)
+_SKIP_WORDS = frozenset(("env", "command", "exec", "nohup", "time", "sudo"))
+_SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
+_SHELL_C_FLAG = re.compile(r"-[A-Za-z].*c", re.S)  # -lc, -ec, ... (plain -c is tested separately)
+_GIT_SKIP2 = frozenset(("-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix"))
+
+
+class Decision:
+    """What a rule decided: kind is "allow", "ask" or "block"; message is shown to the model or the user."""
+
+    def __init__(self, kind: str, message: str = "") -> None:
+        self.kind = kind
+        self.message = message
+
+    def __repr__(self) -> str:
+        return f"Decision({self.kind!r}, {self.message!r})"
+
+
+ALLOW = Decision("allow")
+
+
+class Judge:
+    """Walks a command line and collects the decisions of the rules.
+
+    `branch` is the branch later segments are judged on; `git switch/checkout` earlier in the same
+    command line moves it. The first block wins, then the first ask (see decision()).
+    """
+
+    def __init__(self, cfg: Config, branch: str) -> None:
+        self.cfg = cfg
+        self.branch = branch
+        self.first_block: Optional[Decision] = None
+        self.first_ask: Optional[Decision] = None
+
+    def record(self, d: Decision) -> None:
+        if d.kind == "block" and self.first_block is None:
+            self.first_block = d
+        elif d.kind == "ask" and self.first_ask is None:
+            self.first_ask = d
+
+    def decision(self) -> Decision:
+        return self.first_block or self.first_ask or ALLOW
+
+    # rules: filled in by the rule functions of guard-git (merge, commit, push)
+    def rule_merge(self, b: str, args: list[str]) -> None:
+        pass
+
+    def rule_commit(self, b: str) -> None:
+        pass
+
+    def rule_push(self, b: str, args: list[str]) -> None:
+        pass
+
+    def scan(self, cmd: str, depth: int) -> None:
+        """Judge every git command in cmd, in order."""
+        for seg in segments(tokenize(cmd)):
+            self.check_segment(depth, seg)
+
+    def track_switch(self, sub: str, args: list[str]) -> None:
+        """Move self.branch the way `git switch/checkout <args>` would."""
+        new = target = ""
+        detach = False
+        k = 0
+        while k < len(args):
+            a = args[k]
+            k += 1
+            if a == "--":
+                break
+            if a in ("-b", "-B", "-c", "-C", "--create", "--force-create", "--orphan"):
+                new = args[k] if k < len(args) else ""
+                k += 1
+            elif a in ("-d", "--detach"):
+                detach = True
+            elif a.startswith("-"):
+                pass
+            elif not target:
+                target = a
+        if new:
+            self.branch = new
+        elif detach:
+            self.branch = ""
+        elif target and (sub == "switch" or branch_exists(target)):
+            self.branch = target
+
+    def check_segment(self, depth: int, words: list[str]) -> None:
+        w = words
+        i = 0
+        while i < len(w) and (_ENV_ASSIGN.match(w[i]) or w[i] in _SKIP_WORDS):
+            i += 1
+        if i >= len(w):
+            return
+        prog = w[i].rsplit("/", 1)[-1]
+        if prog in _SHELLS:
+            for j in range(i + 1, len(w)):
+                if (w[j] == "-c" or _SHELL_C_FLAG.fullmatch(w[j])) and j + 1 < len(w) and depth < MAX_DEPTH:
+                    self.scan(w[j + 1], depth + 1)
+            return
+        if prog == "eval":
+            if depth < MAX_DEPTH:
+                self.scan(" ".join(w[i + 1:]), depth + 1)
+            return
+        if prog not in ("git", "git.exe"):
+            return
+        i += 1
+        git_dir = ""
+        while i < len(w):
+            if w[i] == "-C":
+                git_dir = w[i + 1] if i + 1 < len(w) else ""
+                i += 2
+            elif w[i] in _GIT_SKIP2:
+                i += 2
+            elif w[i].startswith("-"):
+                i += 1
+            else:
+                break
+        if i >= len(w):
+            return
+        sub, args = w[i], w[i + 1:]
+        b = self.branch if not git_dir else current_branch(git_dir)
+        if sub in ("switch", "checkout"):
+            if not git_dir:
+                self.track_switch(sub, args)
+        elif sub == "merge":
+            if b and self.cfg.is_protected(b):
+                self.rule_merge(b, args)
+        elif sub == "commit":
+            if b and self.cfg.is_protected(b):
+                self.rule_commit(b)
+        elif sub == "push":
+            self.rule_push(b, args)
