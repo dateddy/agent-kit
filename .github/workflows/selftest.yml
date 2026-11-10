@@ -16,11 +16,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install ruff
-        run: pip install ruff==0.17.3
+      - name: Install ruff and shellcheck (pinned)
+        run: pip install ruff==0.17.3 shellcheck-py==0.11.0.1
       - name: shellcheck (bash scripts)
         run: |
           shellcheck --version
+          shellcheck --version | grep -q 'version: 0.11.0'
           shellcheck --severity=warning scripts/*.sh scripts/pre-push scripts/tests/*.sh
       - name: ruff check (kit Python)
         run: ruff check tools skills
