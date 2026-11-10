@@ -246,7 +246,7 @@ t_lint_failure() {
 }
 
 t_not_a_repo_hook_is_quiet_cli_fails() {
-  d=$(mktemp -d "$TMP_ROOT/plain.XXXXXX"); cd "$d"
+  d=$(mktemp -d "$TMP_ROOT/plain.XXXXXX"); cd "$d" || return
   run bash "$V" --hook </dev/null
   assert_eq 0 "$RC" "hook outside a repo does nothing"
   run bash "$V"

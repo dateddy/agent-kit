@@ -271,7 +271,7 @@ def cmd_scan(a, cfg):
     paths = [p for p in changed_paths(a.staged) if not kit_managed(p)]
     if not a.staged:
         paths += [p for xy, p in status_entries() if xy == "??" and not kit_managed(p)]
-    findings, warns = [], []
+    findings = []
     for p in paths:
         base = os.path.basename(p)
         if any(fnmatch.fnmatch(base, g) for g in BAD_FILES) and base not in ALLOW_FILES:

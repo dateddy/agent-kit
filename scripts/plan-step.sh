@@ -11,6 +11,7 @@
 # which `notes.py task --check N` maintains; when every item is checked it is the last step.
 # `files` prints one path per line with "(new)" removed; --cumulative covers steps 1..active.
 set -u
+# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
 AK_FAIL=1
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

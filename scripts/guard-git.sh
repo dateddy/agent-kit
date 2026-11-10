@@ -21,6 +21,7 @@
 # moves the branch the later segments are judged on. `bash -c "..."` and `eval` are looked into.
 # This catches mistakes, not a determined bypass (no shell expansion, aliases or scripts are followed).
 set -u
+# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
 if [ $# -gt 0 ]; then MODE=arg; AK_FAIL=1; BLOCK_RC=1; else MODE=hook; AK_FAIL=2; BLOCK_RC=2; fi
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

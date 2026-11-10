@@ -15,6 +15,7 @@
 #    its failure rejects the push.
 # Deleting a branch or pushing a tag is not judged by (1).
 set -u
+# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
 AK_FAIL=1
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
@@ -33,6 +34,7 @@ first_parent_range() {
 }
 
 bad=0 pushed=0
+# shellcheck disable=SC2034  # read -r needs a name for the local-ref field; only lsha and rref are used
 while read -r lref lsha rref rsha; do
   [ -n "${lsha:-}" ] || continue
   is_zero "$lsha" && continue  # deleting a ref
@@ -50,6 +52,7 @@ while read -r lref lsha rref rsha; do
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     # `rev-list --parents -n 1` prints "<commit> <parent>..."; fewer than 3 words means < 2 parents
+    # shellcheck disable=SC2046  # intentional word splitting: the words become $1 $2 $3 to count parents
     set -- $(git rev-list --parents -n 1 "$c")
     [ $# -ge 3 ] && continue
     n=$((n + 1))

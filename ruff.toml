@@ -1,0 +1,13 @@
+# Lint config for the kit's own Python. Run: ruff check tools skills
+# Never run `ruff format` here: the kit's style is not ruff's (FAILURES.md 2026-11-07).
+# 180 = the longest existing line (179); this keeps E501 from forcing a rewrite.
+line-length = 180
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E702",  # compact `a = 1; b = 2` lines are the kit's style
+    "E731",  # one local lambda in tools/bench/bench.py
+    "E741",  # `l` is the loop variable for a line of text
+]

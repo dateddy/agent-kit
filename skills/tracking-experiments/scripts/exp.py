@@ -20,7 +20,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import re
 import secrets
 import subprocess
 import sys

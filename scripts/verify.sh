@@ -46,6 +46,7 @@ if [ "$HOOK" = 1 ] && [ ! -t 0 ]; then
   # Matched with grep, not jq, so it is read before lib.sh can fail (e.g. jq missing) with exit 2.
   printf '%s' "$HOOK_IN" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true' && STOP_ACTIVE=1
 fi
+# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
 if [ "$HOOK" = 1 ] && [ "$STOP_ACTIVE" = 0 ]; then AK_FAIL=2; FAIL_RC=2
 elif [ "$HOOK" = 1 ]; then AK_FAIL=0; FAIL_RC=0  # report, never block twice in one chain
 else AK_FAIL=1; FAIL_RC=1; fi
