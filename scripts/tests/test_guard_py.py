@@ -4,6 +4,7 @@ Run: python -m unittest scripts/tests/test_guard_py.py -v
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -586,6 +587,59 @@ class CliTests(unittest.TestCase):
                 rc, out, err = self.run_guard(args)
                 self.assertEqual((rc, out), (1, b""))
                 self.assertTrue(err.startswith(b"usage: guard.py bash [COMMAND...]"))
+
+
+class WrapperTests(unittest.TestCase):
+    """guard-git.sh picks the interpreter: python3, python, py -3; the Microsoft Store stub (WindowsApps) is skipped."""
+
+    WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard-git.sh")
+
+    def setUp(self):
+        if shutil.which("bash") is None:
+            self.skipTest("bash not found")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def fake(self, rel, name, body):
+        d = os.path.join(self.tmp.name, rel)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/bin/sh" + chr(10) + body + chr(10))
+        os.chmod(path, 0o755)
+        return d
+
+    def run_wrapper(self, dirs, *args, stdin=b""):
+        env = dict(os.environ, PATH=os.pathsep.join(dirs + [os.path.dirname(shutil.which("bash"))]))
+        p = subprocess.run(["bash", self.WRAPPER, *args], input=stdin, capture_output=True, env=env)
+        return p.returncode, p.stdout.decode(), p.stderr.decode()
+
+    def test_store_stub_is_skipped_and_args_and_stdin_reach_guard_py(self):
+        stub = self.fake("Apps/WindowsApps", "python3", "echo STUB; exit 9")
+        real = self.fake("bin", "python", 'echo "FAKE $@"; cat')
+        rc, out, err = self.run_wrapper([stub, real], "git", "commit", stdin=b"payload")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("STUB", out)
+        self.assertTrue(out.startswith("FAKE ") and "payload" in out, out)
+        self.assertIn("guard.py bash git commit", out)
+        self.assertIn("payload", out)                                           # stdin passes straight through exec
+
+    def test_python3_comes_before_python(self):
+        a = self.fake("a", "python3", 'echo "P3 $@"')
+        b = self.fake("b", "python", 'echo "P2 $@"')
+        rc, out, err = self.run_wrapper([a, b], "git", "status")
+        self.assertEqual((rc, out.split()[0]), (0, "P3"), (out, err))
+
+    def test_no_python_fails_loudly(self):
+        stub = self.fake("Apps/WindowsApps", "python3", "echo STUB; exit 9")
+        for dirs in ([], [stub]):
+            rc, out, err = self.run_wrapper(dirs, "git", "commit")
+            if "python" in err and "not found" not in err:  # a real python is on the minimal PATH of this machine
+                self.skipTest("python is next to bash on this machine")
+            self.assertEqual((rc, out), (1, ""), err)                          # argument mode: exit 1
+            self.assertIn("python not found: install Python 3.9+", err)
+            rc, out, err = self.run_wrapper(dirs, stdin=b"{}")
+            self.assertEqual((rc, out), (2, ""), err)                          # hook mode: only exit 2 blocks
 
 
 if __name__ == "__main__":
