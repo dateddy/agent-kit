@@ -526,7 +526,7 @@ def g1(t: T):
     d = t.repo("g1")
     code, out = kit("install", str(d), "--guards", cwd=t.base)
     check(code == 0, f"exit {code}: {out[-400:]}")
-    for n in ("lib.sh", "guard-git.sh", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push"):
+    for n in ("lib.sh", "guard-git.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push"):
         f = d / ".agentkit/scripts" / n
         check(f.is_file() and b"\r" not in f.read_bytes(), f"{n} missing or has CR")
     hooks = settings_of(d)["hooks"]
@@ -547,6 +547,7 @@ def g1(t: T):
           "FAILURES.md should hold the format header only")
     ga = (d / ".gitattributes").read_text(encoding="utf-8")
     check("FAILURES.md merge=union" in ga, f".gitattributes: {ga!r}")
+    check(".agentkit/scripts/** text eol=lf" in ga, f"eol=lf rule must cover guard.py: {ga!r}")
     check(".agentkit/scripts/** text eol=lf" in ga, f"eol=lf rule for the guard scripts missing: {ga!r}")
     git(d, "config", "core.autocrlf", "true")
     git(d, "add", ".agentkit/scripts", ".gitattributes")
