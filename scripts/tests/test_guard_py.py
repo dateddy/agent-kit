@@ -2,6 +2,7 @@
 
 Run: python -m unittest scripts/tests/test_guard_py.py -v
 """
+import json
 import os
 import subprocess
 import sys
@@ -359,6 +360,232 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(walk("git merge x && git commit", "feat", guard.Config()).calls, [])
         self.assertEqual(walk("git merge x && git commit", "").calls, [])           # detached HEAD
         self.assertEqual(walk("git push", "feat", guard.Config()).calls, [("push", "feat", [])])
+
+
+def judge(cmd, branch="main", data=None):
+    j = guard.Judge(guard.Config(data), branch)
+    j.scan(cmd, 0)
+    return j.decision()
+
+
+HINT_MAIN = "Inspect the convention first: git log --first-parent --merges -5 main --oneline"
+
+
+class RuleTests(unittest.TestCase):
+    def test_merge_rules(self):
+        def plain(why, b="main"):
+            return f"BLOCK: {why} on protected branch '{b}'. Use: git merge --no-ff <branch>\n" + HINT_MAIN.replace(" main ", f" {b} ")
+
+        table = [
+            ("git merge x", plain("a plain 'git merge' can fast-forward")),
+            ("git merge --ff-only x", plain("--ff-only is not allowed")),
+            ("git merge --squash x", plain("--squash is not allowed")),
+            ("git merge --no-ff --squash x", plain("--squash is not allowed")),
+            ("git merge --ff-only --squash x", plain("--squash is not allowed")),   # squash wins whatever the order
+            ("git merge --squash --ff-only x", plain("--squash is not allowed")),
+            ("git merge --no-ff --ff-only x", plain("--ff-only is not allowed")),   # --no-ff does not rescue --ff-only
+            ("git merge --no-ff x", None),
+            ("git merge --no-ff -m 'feat: m' x", None),
+            ("git merge --abort", None),
+            ("git merge --continue", None),
+            ("git merge --quit", None),
+            ("git merge --ff-only --abort", None),                                    # control flags pass whatever else is there
+            ("git merge-base main x", None),
+            ("git merge", plain("a plain 'git merge' can fast-forward")),
+        ]
+        for cmd, want in table:
+            with self.subTest(cmd=cmd):
+                d = judge(cmd)
+                if want is None:
+                    self.assertEqual(d.kind, "allow")
+                else:
+                    self.assertEqual((d.kind, d.message), ("block", want))
+        self.assertEqual(judge("git merge --ff-only x", "feat").kind, "allow")      # not protected
+        self.assertEqual(judge("git merge --ff-only x", "").kind, "allow")          # detached HEAD
+        d = judge("git merge x", "trunk", {"git": {"protected_branches": ["trunk"]}, "guards": {"merge_convention": "merge commit named X"}})
+        self.assertEqual(d.message, "BLOCK: a plain 'git merge' can fast-forward on protected branch 'trunk'. Use: git merge --no-ff <branch>\n"
+                         "Convention: merge commit named X\n"
+                         "Inspect the convention first: git log --first-parent --merges -5 trunk --oneline")
+        d = judge("git merge x", "main", {"guards": {"merge_convention": "line1\n\nline2"}})
+        self.assertIn("Convention: line1\nline2\nInspect", d.message)               # empty lines are dropped, like sed '/^$/d'
+
+    def test_commit_policy(self):
+        ask = "Commit on protected branch 'main'. Approve only if the user asked for it; otherwise create a task branch first."
+        block = "BLOCK: commit on protected branch 'main' (git.protected_commit=block). Create a task branch: git switch -c <type>/<name>"
+        table = [
+            (None, ("ask", ask)),
+            ({}, ("ask", ask)),
+            ({"git": {"protected_commit": "ask"}}, ("ask", ask)),
+            ({"git": {"protected_commit": "weird"}}, ("ask", ask)),                 # anything unknown means ask
+            ({"git": {"protected_commit": "allow"}}, ("allow", "")),
+            ({"git": {"protected_commit": "block"}}, ("block", block)),
+        ]
+        for data, want in table:
+            with self.subTest(data=data):
+                d = judge("git commit -m x", "main", data)
+                self.assertEqual((d.kind, d.message), want)
+        self.assertEqual(judge("git commit -m x", "feat").kind, "allow")
+        self.assertEqual(judge("git commit -m x", "").kind, "allow")
+
+    def test_push_specs(self):
+        ASK = "Push to protected branch '{}'. Approve only if the user asked for it; prefer pushing a task branch."
+        ALL = "every branch (--all/--mirror)"
+        table = [
+            # push arguments, current branch, protected branch that was hit (None = allowed)
+            ("", "main", "main"),
+            ("", "feat", None),
+            ("", "", None),
+            ("origin HEAD:main", "feat", "main"),
+            ("origin feat/x:main", "feat", "main"),
+            ("origin +main", "feat", "main"),
+            ("--force origin main", "feat", "main"),
+            ("origin --delete main", "feat", "main"),
+            ("origin refs/heads/main", "feat", "main"),
+            ("origin HEAD", "feat", None),
+            ("origin HEAD", "main", "main"),                                          # HEAD means the current branch
+            ("origin HEAD", "", None),
+            ("origin v1.0.0", "feat", None),
+            ("-u origin feat/x", "feat", None),
+            ("origin main:feat", "feat", None),                                       # only the destination counts
+            ("origin feat:release/1", "feat", "release/1"),
+            ("origin HEAD:", "feat", None),
+            ("origin main feat", "feat", "main"),
+            ("origin feat main", "feat", "main"),
+            ("--all origin", "feat", ALL),
+            ("--mirror", "feat", ALL),
+            ("--all origin feat", "feat", ALL),                                       # no protected refspec: the --all hit stays
+            ("--all", "main", "main"),                                                # a bare push from a protected branch overrides it
+            ("-o main origin feat", "feat", None),                                    # -o takes a value, so main is not a refspec
+            ("--push-option x --repo y origin feat", "feat", None),
+            ("origin", "main", "main"),
+            ("origin", "feat", None),
+        ]
+        for args, br, hit in table:
+            with self.subTest(args=args, branch=br):
+                d = judge(("git push " + args).strip(), br)
+                if hit is None:
+                    self.assertEqual(d.kind, "allow")
+                else:
+                    self.assertEqual((d.kind, d.message), ("ask", ASK.format(hit)))
+        d = judge("git push origin main", "feat", {"git": {"protected_commit": "block"}})
+        self.assertEqual((d.kind, d.message), ("block", "BLOCK: push to protected branch 'main' (git.protected_commit=block). Push a task branch and merge with --no-ff."))
+        self.assertEqual(judge("git push origin main", "feat", {"git": {"protected_commit": "allow"}}).kind, "allow")
+
+    def test_first_block_beats_ask(self):
+        d = judge("git commit -m x && git merge x")                                    # ask first, block second
+        self.assertEqual(d.kind, "block")
+        self.assertIn("a plain 'git merge' can fast-forward", d.message)
+        d = judge("git merge x && git merge --squash y")                              # two blocks: the first one
+        self.assertIn("a plain 'git merge' can fast-forward", d.message)
+        d = judge("git commit -m x; git push")                                        # two asks: the first one
+        self.assertEqual(d.kind, "ask")
+        self.assertTrue(d.message.startswith("Commit on protected branch"))
+        d = judge("git push; git commit -m x")
+        self.assertTrue(d.message.startswith("Push to protected branch"))
+        d = judge("git commit -m x && git merge x", "main", {"git": {"protected_commit": "block"}})
+        self.assertTrue(d.message.startswith("BLOCK: commit on protected branch"))   # first of two blocks
+        self.assertEqual(judge("git status").kind, "allow")
+
+
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard.py")
+ASK_COMMIT = "Commit on protected branch 'main'. Approve only if the user asked for it; otherwise create a task branch first."
+ASK_JSON = ('{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"'
+            + ASK_COMMIT + '"}}\n').encode()
+NOT_JSON = b"guard-git: stdin is not Claude Code hook JSON. Pass the command as arguments instead.\n"
+
+
+class CliTests(unittest.TestCase):
+    """guard.py as a process: argument mode and Claude Code hook mode, in a throwaway repo on main."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.repo = cls.tmp.name
+        cls.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, PYTHONUTF8="1")
+        subprocess.run(["git", "init", "-q", "-b", "main", cls.repo], check=True, env=cls.env)
+        subprocess.run(["git", "-C", cls.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"],
+                       check=True, env=cls.env)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_guard(self, args, stdin=b"", cwd=None):
+        p = subprocess.run([sys.executable, GUARD, *args], input=stdin, capture_output=True, cwd=cwd or self.repo, env=self.env)
+        return p.returncode, p.stdout, p.stderr
+
+    def hook(self, command, cwd=None):
+        return self.run_guard(["bash"], json.dumps({"tool_input": {"command": command}}).encode(), cwd)
+
+    def test_ask_json_exact_bytes(self):
+        for rc, out, err in (self.run_guard(["bash", "git", "commit", "-m", "x"]), self.hook("git commit -m x")):
+            self.assertEqual((rc, out, err), (0, ASK_JSON, b""))      # stdout is exactly the JSON, nothing on stderr
+        self.assertEqual(json.loads(ASK_JSON)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_arg_mode_block_rc1(self):
+        rc, out, err = self.run_guard(["bash", "git", "merge", "--ff-only", "x"])
+        self.assertEqual((rc, out), (1, b""))
+        self.assertTrue(err.decode().startswith("BLOCK: --ff-only is not allowed on protected branch 'main'."))
+        self.assertTrue(err.endswith(b"git log --first-parent --merges -5 main --oneline\n"))
+        rc, out, err2 = self.hook("git merge --ff-only x")             # hook mode: only exit 2 blocks, same message
+        self.assertEqual((rc, out, err2), (2, b"", err))
+        self.assertEqual(self.run_guard(["bash", "git", "merge", "--no-ff", "x"]), (0, b"", b""))
+        self.assertEqual(self.run_guard(["bash", "git", "log"]), (0, b"", b""))
+
+    def test_hook_stdin_crlf_json(self):
+        lf = '{\n "tool_input": {\n  "command": "git commit -m x"\n }\n}\n'
+        crlf = lf.replace("\n", "\r\n")
+        self.assertEqual(self.run_guard(["bash"], crlf.encode()), (0, ASK_JSON, b""))
+        self.assertEqual(self.run_guard(["bash"], lf.encode()), (0, ASK_JSON, b""))
+        # CR and LF at the end of the command (JSON escapes) are not part of the command
+        self.assertEqual(self.hook("git commit -m x\r\n"), (0, ASK_JSON, b""))
+        self.assertEqual(self.hook("git commit -m x\r"), (0, ASK_JSON, b""))
+        # CR inside the command is dropped, as `tr -d '\r'` did
+        self.assertEqual(self.hook("git comm\rit -m x"), (0, ASK_JSON, b""))
+        rc, out, err = self.hook("git merge --ff-only x\r\n")
+        self.assertEqual((rc, out), (2, b""))
+        self.assertNotIn(b"\r", err)
+
+    def test_hook_empty_command(self):
+        for text in ('{"tool_input":{}}', '{"tool_input":{"command":null}}', '{"tool_input":{"command":false}}', '{"tool_input":{"command":""}}',
+                     '{"tool_input":null}', '{"tool_input":"x"}', '{"tool_input":[1]}', "{}", "[]", "3", '"git commit"', "true"):
+            with self.subTest(stdin=text):
+                self.assertEqual(self.run_guard(["bash"], text.encode()), (0, b"", b""))
+        # a command that is not a string is judged as its JSON text: no "git" in it, so it passes
+        self.assertEqual(self.run_guard(["bash"], b'{"tool_input":{"command":3}}'), (0, b"", b""))
+
+    def test_hook_invalid_json_exit2(self):
+        for text in (b"not json", b"", b"   \n", b"null", b"false", b"{", b"\xff\xfe"):
+            with self.subTest(stdin=text):
+                self.assertEqual(self.run_guard(["bash"], text), (2, b"", NOT_JSON))
+
+    def test_non_git_command_is_skipped_before_any_git_call(self):
+        with tempfile.TemporaryDirectory() as d:                         # not a repo, with a config that is not valid JSON
+            with open(os.path.join(d, ".agentkit.json"), "w", encoding="utf-8") as f:
+                f.write("{ nope")
+            rc, out, err = self.hook("ls -la", cwd=d)
+            self.assertEqual((rc, out), (0, b""))
+            self.assertTrue(err.startswith(b"WARN: ") and err.endswith(b".agentkit.json is not valid JSON; using defaults\n"), err)
+            rc, out, err = self.run_guard(["bash"], b"not json", cwd=d)  # the WARN comes first, then the stdin error
+            self.assertEqual(rc, 2)
+            self.assertTrue(err.startswith(b"WARN: ") and err.endswith(NOT_JSON))
+
+    def test_config_is_read_from_the_repo(self):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", "-b", "main", d], check=True, env=self.env)
+            with open(os.path.join(d, ".agentkit.json"), "w", encoding="utf-8") as f:
+                f.write('{"git": {"protected_commit": "block"}}')
+            os.makedirs(os.path.join(d, "sub"))
+            rc, out, err = self.run_guard(["bash", "git", "commit"], cwd=os.path.join(d, "sub"))
+            self.assertEqual((rc, out), (1, b""))
+            self.assertTrue(err.startswith(b"BLOCK: commit on protected branch 'main' (git.protected_commit=block)."))
+
+    def test_subcommands(self):
+        for args in ([], ["git", "commit"], ["edit"], ["--help"]):
+            with self.subTest(args=args):
+                rc, out, err = self.run_guard(args)
+                self.assertEqual((rc, out), (1, b""))
+                self.assertTrue(err.startswith(b"usage: guard.py bash [COMMAND...]"))
 
 
 if __name__ == "__main__":

@@ -171,9 +171,9 @@ def load_config(cwd: Optional[str] = None) -> Config:
     """Config of the repo around cwd (else cwd itself), like AK_ROOT in lib.sh. The WARN goes to stderr here."""
     rc, top = git(["rev-parse", "--show-toplevel"], cwd=cwd)
     root = top if rc == 0 and top else (cwd or os.getcwd())
-    c = Config.from_file(os.path.join(root, ".agentkit.json"))
+    c = Config.from_file(root.rstrip("/\\") + "/.agentkit.json")  # "/" like the bash version; Windows accepts it
     if c.warning:
-        print(c.warning, file=sys.stderr)
+        _out(sys.stderr, c.warning + "\n")
     return c
 
 
@@ -299,15 +299,15 @@ class Judge:
     def decision(self) -> Decision:
         return self.first_block or self.first_ask or ALLOW
 
-    # rules: filled in by the rule functions of guard-git (merge, commit, push)
+    # rules (functions below); tests replace these three to record how they are called
     def rule_merge(self, b: str, args: list[str]) -> None:
-        pass
+        self.record(guard_merge(self.cfg, b, args))
 
     def rule_commit(self, b: str) -> None:
-        pass
+        self.record(guard_commit(self.cfg, b))
 
     def rule_push(self, b: str, args: list[str]) -> None:
-        pass
+        self.record(guard_push(self.cfg, b, args))
 
     def scan(self, cmd: str, depth: int) -> None:
         """Judge every git command in cmd, in order."""
@@ -386,3 +386,169 @@ class Judge:
                 self.rule_commit(b)
         elif sub == "push":
             self.rule_push(b, args)
+
+
+# ---------------------------------------------------------------- rules (messages are verbatim from guard-git.sh)
+def _block(msg: str) -> Decision:
+    return Decision("block", msg)
+
+
+def protected_policy(cfg: Config) -> str:
+    """git.protected_commit: "allow" | "block" | anything else means "ask"."""
+    v = cfg.cfg("git.protected_commit", "ask")
+    return v if v in ("allow", "block") else "ask"
+
+
+def merge_hint(cfg: Config, branch: str) -> str:
+    conv = cfg.cfg("guards.merge_convention", "")
+    text = (f"Convention: {conv}" if conv else "") + f"\nInspect the convention first: git log --first-parent --merges -5 {branch} --oneline"
+    return "\n".join(line for line in text.split("\n") if line)
+
+
+def guard_merge(cfg: Config, b: str, args: list[str]) -> Decision:
+    """`git merge` on protected branch b: needs --no-ff; --ff-only and --squash are always blocked."""
+    if any(a in ("--abort", "--continue", "--quit") for a in args):
+        return ALLOW
+    why = ""
+    for a in args:
+        if a == "--squash":
+            why = "--squash is not allowed"
+        elif a == "--ff-only" and not why:
+            why = "--ff-only is not allowed"
+    if not why:
+        if "--no-ff" in args:
+            return ALLOW
+        why = "a plain 'git merge' can fast-forward"
+    return _block(f"BLOCK: {why} on protected branch '{b}'. Use: git merge --no-ff <branch>\n{merge_hint(cfg, b)}")
+
+
+def guard_commit(cfg: Config, b: str) -> Decision:
+    policy = protected_policy(cfg)
+    if policy == "allow":
+        return ALLOW
+    if policy == "block":
+        return _block(f"BLOCK: commit on protected branch '{b}' (git.protected_commit=block). Create a task branch: git switch -c <type>/<name>")
+    return Decision("ask", f"Commit on protected branch '{b}'. Approve only if the user asked for it; otherwise create a task branch first.")
+
+
+def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
+    """`git push` that targets a protected branch (b is the branch the push is judged on)."""
+    remote = ""
+    push_all = False
+    skip = False
+    specs: list[str] = []
+    for a in args:
+        if skip:
+            skip = False
+        elif a in ("-o", "--push-option", "--repo", "--receive-pack", "--exec"):
+            skip = True
+        elif a in ("--all", "--mirror"):
+            push_all = True
+        elif a.startswith("-"):
+            pass
+        elif not remote:
+            remote = a
+        else:
+            specs.append(a)
+    hit = "every branch (--all/--mirror)" if push_all else ""
+    if not specs:
+        if b and cfg.is_protected(b):
+            hit = b
+    else:
+        for s in specs:
+            if s.startswith("+"):
+                s = s[1:]
+            dst = s.rsplit(":", 1)[-1]
+            if dst == "HEAD":
+                dst = b
+            if dst.startswith("refs/heads/"):
+                dst = dst[len("refs/heads/"):]
+            if dst and cfg.is_protected(dst):
+                hit = dst
+    if not hit:
+        return ALLOW
+    policy = protected_policy(cfg)
+    if policy == "allow":
+        return ALLOW
+    if policy == "block":
+        return _block(f"BLOCK: push to protected branch '{hit}' (git.protected_commit=block). Push a task branch and merge with --no-ff.")
+    return Decision("ask", f"Push to protected branch '{hit}'. Approve only if the user asked for it; prefer pushing a task branch.")
+
+
+# ---------------------------------------------------------------- command line
+USAGE = "usage: guard.py bash [COMMAND...]\n  no COMMAND: read the Claude Code PreToolUse JSON from stdin\n"
+NOT_HOOK_JSON = "guard-git: stdin is not Claude Code hook JSON. Pass the command as arguments instead."
+
+
+def _out(stream: Any, text: str) -> None:
+    """Write text to a stream as UTF-8 bytes whatever the console encoding is."""
+    stream.buffer.write(text.encode("utf-8"))
+    stream.flush()
+
+
+def hook_command(raw: bytes) -> Optional[str]:
+    """The Bash command of a PreToolUse payload (.tool_input.command), "" when there is none; None when raw is not JSON.
+
+    Follows `jq -e .` and `jq -r '.tool_input.command // empty'`: null/false (or empty) input is not valid,
+    a missing, null or false command is "", other values are printed the way jq's tostring does.
+    """
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except ValueError:
+        return None
+    if data is None or data is False:
+        return None
+    tool_input = data.get("tool_input") if isinstance(data, dict) else None
+    cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if cmd is None or cmd is False:
+        return ""
+    return _jq_tostring(cmd).replace("\r", "").replace("\x00", "").rstrip("\n")
+
+
+def ask_json(reason: str) -> str:
+    payload = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": reason}}
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
+
+
+def cmd_bash(args: list[str]) -> int:
+    """Judge a shell command given as arguments (BLOCK = exit 1) or as hook JSON on stdin (BLOCK = exit 2)."""
+    block_rc = 1 if args else 2
+    cfg = load_config()  # may warn on stderr, before anything is read (as sourcing lib.sh did)
+    if args:
+        cmd = " ".join(args)
+    else:
+        parsed = hook_command(sys.stdin.buffer.read())
+        if parsed is None:
+            _out(sys.stderr, NOT_HOOK_JSON + "\n")
+            return block_rc
+        cmd = parsed
+    if "git" not in cmd:  # nothing to judge: skip the git calls
+        return 0
+    judge = Judge(cfg, current_branch())
+    judge.scan(cmd, 0)
+    d = judge.decision()
+    if d.kind == "block":
+        _out(sys.stderr, d.message + "\n")
+        return block_rc
+    if d.kind == "ask":
+        _out(sys.stdout, ask_json(d.message))
+    return 0
+
+
+SUBCOMMANDS = {
+    "bash": cmd_bash,
+    # "edit": cmd_edit,  # added in step 1b (file-edit rules)
+}
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    handler = SUBCOMMANDS.get(argv[0]) if argv else None
+    if handler is None:
+        _out(sys.stderr, USAGE)
+        return 1
+    return handler(argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
