@@ -4,7 +4,27 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff==0.17.3
+      - name: shellcheck (bash scripts)
+        run: |
+          shellcheck --version
+          shellcheck --severity=warning scripts/*.sh scripts/pre-push scripts/tests/*.sh
+      - name: ruff check (kit Python)
+        run: ruff check tools skills
+
   selftest:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
