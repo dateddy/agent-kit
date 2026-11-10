@@ -7,7 +7,7 @@
 #   assert_eq want got msg  / assert_contains haystack needle msg / assert_not_contains ...
 # Inside fn `set -e` is on, so a failed assertion aborts that case only.
 
-# shellcheck disable=SC2034  # used by the test files that source this one
+# shellcheck disable=SC2034  # read by all test_*.sh (test_guard_git, test_lib, test_plan_step, test_pre_push, test_verify)
 KIT_SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PASSED=0
 FAILED=0
@@ -18,7 +18,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0
 unset GIT_DIR GIT_WORK_TREE
 
-# shellcheck disable=SC2034  # OUT, RC and ERR are read by the test files that source this one
+# shellcheck disable=SC2034  # OUT: test_guard_git, test_lib, test_plan_step, test_verify; RC: test_guard_git, test_plan_step, test_pre_push, test_verify; ERR: all five
 run() {
   OUT=$("$@" 2>"$TMP_ROOT/err") && RC=0 || RC=$?
   ERR=$(cat "$TMP_ROOT/err")

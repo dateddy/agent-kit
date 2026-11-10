@@ -95,5 +95,5 @@ need() {
 }
 
 # ruff must not lint the kit's own vendored scripts or the agent settings directory
-# shellcheck disable=SC2034  # used by the scripts that source lib.sh
+# shellcheck disable=SC2034  # read by ruff-fix.sh and verify.sh, which source lib.sh
 AK_RUFF_EXCLUDE=(--extend-exclude .agentkit --extend-exclude .claude)
