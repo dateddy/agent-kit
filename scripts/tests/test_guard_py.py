@@ -595,7 +595,8 @@ class WrapperTests(unittest.TestCase):
     WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard-git.sh")
 
     def setUp(self):
-        if shutil.which("bash") is None:
+        bash = shutil.which("bash")
+        if bash is None or any(p in bash.lower() for p in ("system32", "windowsapps")):  # none, or the WSL launcher
             self.skipTest("bash not found")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -609,9 +610,20 @@ class WrapperTests(unittest.TestCase):
         os.chmod(path, 0o755)
         return d
 
-    def run_wrapper(self, dirs, *args, stdin=b""):
-        env = dict(os.environ, PATH=os.pathsep.join(dirs + [os.path.dirname(shutil.which("bash"))]))
-        p = subprocess.run(["bash", self.WRAPPER, *args], input=stdin, capture_output=True, env=env)
+    def minimal_bin(self):
+        """A directory holding only bash and dirname (symlinks), so no real python can be found next to them."""
+        d = os.path.join(self.tmp.name, "min")
+        os.makedirs(d, exist_ok=True)
+        for tool in ("bash", "dirname"):
+            link = os.path.join(d, tool)
+            if not os.path.exists(link):
+                os.symlink(shutil.which(tool), link)
+        return d
+
+    def run_wrapper(self, dirs, *args, stdin=b"", minimal=False):
+        tail = self.minimal_bin() if minimal else os.path.dirname(shutil.which("bash"))
+        env = dict(os.environ, PATH=os.pathsep.join(dirs + [tail]))
+        p = subprocess.run([shutil.which("bash"), self.WRAPPER, *args], input=stdin, capture_output=True, env=env)
         return p.returncode, p.stdout.decode(), p.stderr.decode()
 
     def test_store_stub_is_skipped_and_args_and_stdin_reach_guard_py(self):
@@ -631,14 +643,14 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual((rc, out.split()[0]), (0, "P3"), (out, err))
 
     def test_no_python_fails_loudly(self):
+        if os.name == "nt":
+            self.skipTest("needs symlinks to build a PATH without python (checked by hand on Windows)")
         stub = self.fake("Apps/WindowsApps", "python3", "echo STUB; exit 9")
         for dirs in ([], [stub]):
-            rc, out, err = self.run_wrapper(dirs, "git", "commit")
-            if "python" in err and "not found" not in err:  # a real python is on the minimal PATH of this machine
-                self.skipTest("python is next to bash on this machine")
+            rc, out, err = self.run_wrapper(dirs, "git", "commit", minimal=True)
             self.assertEqual((rc, out), (1, ""), err)                          # argument mode: exit 1
             self.assertIn("python not found: install Python 3.9+", err)
-            rc, out, err = self.run_wrapper(dirs, stdin=b"{}")
+            rc, out, err = self.run_wrapper(dirs, stdin=b"{}", minimal=True)
             self.assertEqual((rc, out), (2, ""), err)                          # hook mode: only exit 2 blocks
 
 

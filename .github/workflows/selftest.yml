@@ -64,4 +64,5 @@ jobs:
         shell: bash
         run: bash scripts/test-kit.sh
       - name: Guard Python tests
+        shell: bash  # on Windows this puts Git's bash first on PATH, not the WSL launcher
         run: python -m unittest scripts/tests/test_guard_py.py -v
