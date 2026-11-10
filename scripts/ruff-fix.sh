@@ -8,6 +8,7 @@
 # Exit 1 would be a silent non-blocking error, so it is never used. Nothing is written to stdout.
 # Switch off with guards.ruff=false in .agentkit.json; the tool is guards.ruff_cmd (default: ruff).
 set -u
+# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
 AK_FAIL=2
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
