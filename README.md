@@ -8,7 +8,7 @@ It is built around three goals:
 - **Engineering over judgment.** Anything that has a rule (commit format, branch policy, secrets, plan completeness, test results) is decided by a Python script, not by the model.
 - **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, tracking experiments, writing prompts.
 
-All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#14-guards-scripts-that-always-run-v030) (v0.3.0, `scripts/`) are bash and need `bash`, `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
+All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#13-guards-scripts-that-always-run-v030) (v0.3.0, `scripts/`) are bash and need `bash`, `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
 
 ---
 
@@ -28,9 +28,9 @@ All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAM
 10. [Adding your own skill](#10-adding-your-own-skill)
 11. [Git hooks](#11-git-hooks)
 12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
-13. [Changelog v3](#13-changelog-v3)
-14. [Guards: scripts that always run (v0.3.0)](#14-guards-scripts-that-always-run-v030)
-15. [Changelog v0.3.2 / v0.3.1 / v0.3.0](#15-changelog-v032--v031--v030)
+13. [Guards: scripts that always run (v0.3.0)](#13-guards-scripts-that-always-run-v030)
+
+Release history: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -82,7 +82,7 @@ python agent-kit/tools/install.py path/to/your-project --git-hooks           # p
 python agent-kit/tools/install.py path/to/your-project --guards              # plus the bash guards (needs jq)
 ```
 
-**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. See [Guards](#14-guards-scripts-that-always-run-v030).
+**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. See [Guards](#13-guards-scripts-that-always-run-v030).
 
 **Core and optional skills.** The default install is small on purpose: every installed skill costs its description in every session.
 
@@ -99,7 +99,7 @@ python agent-kit/tools/install.py path/to/your-project --guards              # p
 | `--git-hooks` | Install `pre-commit` (`gitkit scan --staged`) and `commit-msg` (`gitkit lint-msg`) git hooks; see [Git hooks](#11-git-hooks) |
 | `--uninstall-git-hooks` | Remove only the blocks the kit added to those hooks |
 | `--hooks` | Claude Code SessionStart hook that runs `notes.py brief` (below) |
-| `--guards` [`--team`] | The bash guards, their Claude Code hooks and a `pre-push` git hook; see [Guards](#14-guards-scripts-that-always-run-v030). Hooks go to the uncommitted `.claude/settings.local.json`; `--team` writes the shared `.claude/settings.json` instead |
+| `--guards` [`--team`] | The bash guards, their Claude Code hooks and a `pre-push` git hook; see [Guards](#13-guards-scripts-that-always-run-v030). Hooks go to the uncommitted `.claude/settings.local.json`; `--team` writes the shared `.claude/settings.json` instead |
 | `--force` | Overwrite existing `.claude/skills/<name>` entries that are not links |
 | `--user` | Skills only, into `~/.claude/skills` (core + `--with`) |
 
@@ -117,7 +117,7 @@ What it does (safe to re-run; it never overwrites your files):
 
 Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json` and `notes/decisions.md`. Logs (`.agentkit/logs/`, `experiments/logs/`, `prompts/runs/`) ignore themselves.
 
-To update the kit later, pull it and run `install.py` again. An old `starting-tasks` skill (merged into `writing-plans` in v3) is removed, and an old `/task` command is rewritten to point at `writing-plans`.
+To update the kit later, pull it and run `install.py` again. An old `starting-tasks` skill (merged into `writing-plans` before 0.3, see [CHANGELOG.md](CHANGELOG.md)) is removed, and an old `/task` command is rewritten to point at `writing-plans`.
 
 **Optional SessionStart hook (Claude Code only):** `python agent-kit/tools/install.py path/to/your-project --hooks` merges a hook into `.claude/settings.json` that runs `notes.py brief` when a session starts, resumes, clears or compacts, so the brief is already in context. It never overwrites existing keys or hooks, adds nothing if the same hook exists, and leaves a `settings.json` it cannot parse untouched (exit 2). Trade-off: one fewer turn per session (no manual `nt brief`) versus a Claude-Code-only mechanism and a few hundred tokens added to every session start, even for a question that does not need the brief. Without `--hooks` nothing changes, and the rule in `AGENTS.md` ("start of session: `nt brief`") works in every agent.
 
@@ -350,7 +350,7 @@ The agent updates the task note at plan-step boundaries and before commits, not 
 | `gk branch-name feat "Thêm BM25 fallback" --ticket VMR-12` | → `feat/vmr-12-them-bm25-fallback` (Vietnamese diacritics stripped) |
 | `gk preflight commit\|switch\|merge X\|rebase X\|pull\|push\|stash-pop` | Safety check before the operation; predicts merge conflicts without touching the working tree |
 
-State comes from plain git (`git status -sb`, `git log --oneline -5`, `git stash list`); v3 removed `gk snapshot`, `gk suggest` and `gk stashes`.
+State comes from plain git (`git status -sb`, `git log --oneline -5`, `git stash list`); the pre-0.3 release removed `gk snapshot`, `gk suggest` and `gk stashes`.
 
 **Commit flow** (what happens when you say "commit"): `git status -sb` → group changes by concern (asks you if more than one commit is needed) → stage explicit paths → `preflight commit` → `scan --staged` → capped diff → pick the type, write the message → `lint-msg` until clean → commit. **Code + its tests + its doc line is one commit**, never split and never a question to you. If the repo has the [git hooks](#11-git-hooks), `git commit` runs `scan` and `lint-msg` itself.
 
@@ -679,26 +679,7 @@ python tools/bench/bench.py report bench/results.jsonl --csv bench/summary.csv
 
 The selftest runs all of this against a fake `claude` on `PATH` that emits canned stream-json; neither the selftest nor CI starts the real one.
 
-## 13. Changelog v3
-
-**Fixed (Windows field test)** — most of this landed in the v2 branch and is covered by the selftest:
-- Every script switches stdout/stderr to UTF-8 (`errors="replace"`); `validate_skills.py` fails a script that does not. Child processes are decoded as UTF-8 and given `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`.
-- `verify.py` finds `tests/`, `test/` or root `test_*.py` without any config file, probes `python -m pytest --version`, falls back to `unittest discover`, and prints verdicts with their exit code (`PASS (exit 0)`, `NOTHING VERIFIED (exit 2)`, …).
-- `gk scan` and `gk diff` ignore kit-managed paths; the false "mixed categories" WARN is gone with `suggest`.
-- Clarifying questions: one thing each, a recommended default, at most 3.
-
-**Changed (breaking)** — re-run `install.py` on each project to migrate:
-- `starting-tasks` is merged into `writing-plans` (Frame phase and lite path). The installer removes the old skill and rewrites `.claude/commands/task.md`.
-- `gitkit.py suggest`, `snapshot` and `stashes` are removed; use `git status -sb`, `git log --oneline -5`, `git stash list`.
-- The default install is the five core skills; `tracking-experiments`, `crafting-prompts`, `grilling-designs` and `debugging-systematically` need `--with experiments,prompts,grill,debug`. A re-run keeps optional skills that are already installed.
-- `AGENTS.md` is generated from the installed skills.
-
-**Added**
-- `install.py --git-hooks` / `--uninstall-git-hooks` (see [Git hooks](#11-git-hooks)); `lint-msg` accepts `fixup!`, `squash!`, `amend!` and ignores the `git commit -v` scissors section.
-- `tools/selftest.py` (35 scenarios, `--cp1252`) and GitHub Actions CI on 3 OSes × Python 3.9 / 3.13.
-- `tools/bench/` benchmark harness with a fake `claude` for tests ([Benchmark](#12-benchmark-does-the-kit-help)).
-
-## 14. Guards: scripts that always run (v0.3.0)
+## 13. Guards: scripts that always run (v0.3.0)
 
 Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are plain bash scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none (a human at a terminal).
 
@@ -833,37 +814,6 @@ python tools/selftest.py            # includes the installer and an end-to-end g
 ```
 
 The bash tests build throwaway git repos, put stub `ruff`/`pytest`/`diff-cover` first on `PATH`, and use real `git push` into a bare remote for `pre-push`. No bats needed. CI runs both on Ubuntu, Windows and macOS.
-
-## 15. Changelog v0.3.2 / v0.3.1 / v0.3.0
-
-### v0.3.2
-
-**Fixed**
-- `verify.sh --hook` no longer loops the Stop hook while the agent waits for the user. It reads `stop_hook_active` from the hook input and never exits 2 when it is true (summary still printed, exit 0). A plan that is saved but not applied (no task note) is `SKIP` in hook mode instead of `FAIL`; the plain CLI and `--push` are unchanged ([hook mode](#verify-hook-mode), FAILURES.md 2026-11-07).
-
-### v0.3.1
-
-**Added**
-- `verify.sh --stages <list>` and `--push`; `guards.hook_stages` (Stop hook) and `guards.push_stages` (`pre-push`) pick which stages each caller runs, e.g. lint + scope on every turn, tests + diff-cover before a push. Unknown names fail.
-- `install.py --guards` checks that bash finds `jq` before writing anything, and exits 1 with install hints if not. `jq` is documented as a prerequisite in [Install](#2-install).
-
-**Fixed**
-- The installer writes `.agentkit/scripts/** text eol=lf` to `.gitattributes`: with `core.autocrlf=true` git checked the scripts out with CRLF and bash failed on them.
-- `ruff-fix.sh` no longer formats `.py` files outside the repository it is installed in (it reformatted another project's file with ruff defaults).
-
-### v0.3.0
-
-The kit's first versioned release (`VERSION`); it follows the unversioned "v3" above.
-
-**Added**
-- `scripts/` guards: `guard-git.sh`, `verify.sh`, `pre-push`, `plan-step.sh`, `ruff-fix.sh`, `lib.sh`, and `test-kit.sh` with bash tests ([Guards](#14-guards-scripts-that-always-run-v030)).
-- `install.py --guards [--team]` (scripts, Claude Code hooks merge, `pre-push` block, `merge.ff` prompt); `--uninstall-git-hooks` also removes the `pre-push` block.
-- `FAILURES.md` and the failure-log rule in `AGENTS.md`; the installer creates a header-only `FAILURES.md` in your repo.
-- `guards` section in `.agentkit.example.json`; `templates/claude-hooks.json`.
-- managing-git: mandatory pre-merge history check (`git log --first-parent --merges -5 <target> --oneline`).
-
-**Changed**
-- Plan steps are `### Step N:` with `Mode`, `Files`, `Contract`, `Tests`, `Out of scope` (and optional `Verify`). `plan.py` reads both formats; `pl check` WARNs on the old one (exit 2), so scripts that expected exit 0 for an old-format plan need the new format.
 
 ## Credits
 

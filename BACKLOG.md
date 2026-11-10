@@ -1,6 +1,6 @@
 # Backlog
 
-Planned work, newest release first. An item moves to the changelog in `README.md` when it ships; an item that
+Planned work, newest release first. An item moves to `CHANGELOG.md` when it ships; an item that
 comes from a corrected agent mistake also gets a `FAILURES.md` entry naming the control.
 
 ## v0.4
