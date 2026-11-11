@@ -5,15 +5,12 @@
     "protected_branches": ["main", "master", "develop", "release/*"],
     "_protected_commit": "ask = agent must get your yes (default) | allow = no question | block = always refuse",
     "protected_commit": "ask",
-    "branch_pattern": "{type}/{ticket}{slug}",
-    "branch_types": ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "ci", "hotfix", "exp"],
     "commit_types": ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"],
     "scopes": [],
     "strict_scopes": false,
     "subject_max": 72,
     "body_wrap": 100,
-    "max_file_mb": 5,
-    "diff_ignore": ["*.lock", "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "*.min.js", "*.map", "*.ipynb", "dist/*", "build/*"]
+    "max_file_mb": 5
   },
 
   "notes": {

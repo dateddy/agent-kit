@@ -34,7 +34,7 @@ Do not create a branch, edit files or write notes before the plan is accepted.
 
 ## Lite path (no plan file, no task note)
 
-Use it when the change touches **≤2 files** and needs **no design decision**. State the frame in one or two lines, make the change, then the normal rules still apply: `vf` exits 0 after the last edit, and commit through managing-git. If you discover a third file or an open choice, stop and switch to the full plan.
+Use it when the change touches **≤2 files** and needs **no design decision**. State the frame in one or two lines, make the change, then the normal rules still apply: `vf` exits 0 after the last edit, and commit with `/commit`. If you discover a third file or an open choice, stop and switch to the full plan.
 
 ## Planning (plan mode is read-only — explore, then output the plan in chat)
 
@@ -72,7 +72,7 @@ The accepted plan is `pl path` (`notes/tasks/<branch>.plan.md`). The active step
 ## After the user accepts (executor, write mode)
 
 ```
-- [ ] 1. Create the task branch (managing-git: gk branch-name …)
+- [ ] 1. Create the task branch (`git switch -c feat/short-name`)
 - [ ] 2. Save the accepted plan verbatim to the path from `pl path`
 - [ ] 3. pl check   → fix BLOCKs (wrong paths, placeholders); report WARNs to the user
 - [ ] 4. pl apply   → loads steps into the task note

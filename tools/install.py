@@ -7,8 +7,9 @@
   python tools/install.py <repo> --hooks  also add a Claude Code SessionStart hook that runs `notes.py brief`
                                           (merged into <repo>/.claude/settings.json; nothing existing is overwritten)
   python tools/install.py <repo> --git-hooks            pre-commit (gitkit scan --staged) and commit-msg (gitkit lint-msg)
-                                                        git hooks; any agent is gated, honours core.hooksPath. An existing
-                                                        hook is kept; a marked block is inserted after its shebang.
+                                                        git hooks that call .agentkit/scripts/gitkit.py; any agent is gated,
+                                                        honours core.hooksPath. An existing hook is kept; the kit's marked
+                                                        block is inserted after its shebang, or rewritten in place.
   python tools/install.py <repo> --uninstall-git-hooks  remove only the marked blocks again
   python tools/install.py <repo> --guards [--team]      computational guards (bash + git + jq + python): copies scripts/ to
                                                         .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git and
@@ -53,7 +54,7 @@ JQ_HINT = ("install jq (https://jqlang.org/download/): Windows `winget install j
            "  `sudo apt install jq`. Check with: bash -c 'command -v jq'")
 ALL_SKILLS = {p.name: p for p in sorted((KIT / "skills").iterdir()) if (p / "SKILL.md").exists()}
 # short name, skill, script: the AGENTS.md "Short names" lines
-SHORT = (("nt", "keeping-notes", "notes.py"), ("gk", "managing-git", "gitkit.py"), ("pl", "writing-plans", "plan.py"),
+SHORT = (("nt", "keeping-notes", "notes.py"), ("pl", "writing-plans", "plan.py"),
          ("vf", "verifying-changes", "verify.py"), ("run", "economizing-context", "run.py"),
          ("rmap", "economizing-context", "repomap.py"), ("dbg", "debugging-systematically", "dbg.py"))
 AGENTS_MARK = "<!-- Project-specific rules below this line -->"
@@ -172,6 +173,9 @@ def migrate_removed(repo: Path, kit_skills, kit_commands) -> int:
                 code = 2
             remove_path(d)
             print(f"remove {d} (removed in 0.5.0)")
+            if name == "managing-git":  # a 0.4.0 git hook still points here; make it fail loudly, never skip
+                write_old_gitkit_shim(repo)
+                print(f"create {repo / OLD_GITKIT} (a hook not yet rewritten by --git-hooks fails with a clear message)")
     for name, digests in shipped["commands"].items():
         cmd = repo / ".claude" / "commands" / name
         if name in kit_commands or not cmd.is_file():
@@ -263,7 +267,7 @@ def hook_block(name: str) -> str:
         HOOK_BEGIN,
         *find_py_function(),
         f"ak_pref={pref}",
-        'ak_gk="$(git rev-parse --show-toplevel)/.agentkit/skills/managing-git/scripts/gitkit.py"',
+        'ak_gk="$(git rev-parse --show-toplevel)/.agentkit/scripts/gitkit.py"',
         "ak_run() {",
         '  if [ -x "$ak_pref" ]; then "$ak_pref" "$@"',
         "  elif ak_find_py; then",
@@ -271,9 +275,12 @@ def hook_block(name: str) -> str:
         '  else echo "agent-kit: python not found \u2014 secret scan and commit lint SKIPPED" >&2; return 0; fi',
         "}",
         "ak_rc=0",
-        'if [ -f "$ak_gk" ]; then',
-        f'  ak_run "$ak_gk" {HOOK_CALLS[name]} || ak_rc=$?',
+        'if [ ! -f "$ak_gk" ]; then',
+        '  echo "agent-kit: .agentkit/scripts/gitkit.py is missing, so this commit is not checked. Run install.py again:" >&2',
+        '  echo "  python <agent-kit>/tools/install.py <this repo> --git-hooks   (or --uninstall-git-hooks to drop the hook)" >&2',
+        "  exit 1",
         "fi",
+        f'ak_run "$ak_gk" {HOOK_CALLS[name]} || ak_rc=$?',
         'if [ "$ak_rc" -eq 1 ]; then exit 1; fi',
         HOOK_END,
         "",
@@ -358,7 +365,18 @@ def install_git_hook(d: Path, name: str, block: str | None = None, manual: str |
     else:
         text = read_raw(path)
         if HOOK_MARK in text:
-            return f"keep {path} (agent-kit block already present)", 0
+            # rewrite the kit's block in place (0.4.0 blocks call the removed managing-git path); user lines stay put
+            seen = []
+
+            def swap(_m):
+                seen.append(1)
+                return block if len(seen) == 1 else ""  # a duplicated block collapses into one
+            new = BLOCK_RE.sub(swap, text)
+            if new == text:
+                return f"keep {path} (agent-kit block already up to date)", 0
+            write_raw(path, new)
+            path.chmod(path.stat().st_mode | 0o111)
+            return f"update {path} (agent-kit block rewritten for .agentkit/scripts/gitkit.py)", 0
         first, _, rest = text.partition("\n")
         if first.startswith("#!"):
             if not SH_SHEBANG.match(first):
@@ -410,6 +428,73 @@ def git_out(repo: Path, *args: str) -> str | None:
     p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=CHILD_ENV)
     return p.stdout.strip() if p.returncode == 0 else None
+
+
+def copy_gitkit(repo: Path) -> str:
+    """scripts/gitkit.py -> <repo>/.agentkit/scripts/gitkit.py: the file the pre-commit and commit-msg hooks call."""
+    dst = repo / ".agentkit" / "scripts" / "gitkit.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    data = (KIT / "scripts" / "gitkit.py").read_bytes().replace(b"\r\n", b"\n")
+    if dst.exists() and dst.read_bytes() == data:
+        return f"keep {dst}"
+    dst.write_bytes(data)
+    return f"copy {dst}"
+
+
+OLD_GITKIT = ".agentkit/skills/managing-git/scripts/gitkit.py"  # where 0.4.0 git hooks look for gitkit
+OLD_GITKIT_SHIM = (
+    "#!/usr/bin/env python3\n"
+    '"""Left by agent-kit 0.5.0 so a git hook written by 0.4.0 fails loudly instead of skipping the check."""\n'
+    "import sys\n\n"
+    'sys.stderr.write("agent-kit: gitkit.py moved to .agentkit/scripts/gitkit.py in 0.5.0 and this git hook still calls the "\n'
+    '                 "old path, so the commit is not checked.\\nRun install.py again: "\n'
+    '                 "python <agent-kit>/tools/install.py <this repo> --git-hooks\\n")\n'
+    "sys.exit(1)\n"
+)
+
+
+def write_old_gitkit_shim(repo: Path) -> None:
+    shim = repo / OLD_GITKIT
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    write_raw(shim, OLD_GITKIT_SHIM)
+
+
+def warn_old_hooks(repo: Path) -> int:
+    """WARN (exit 2) when a kit git hook of this clone still calls the 0.4.0 gitkit path."""
+    d = hooks_dir(repo)
+    code = 0
+    for name in HOOK_CALLS if d else ():
+        p = d / name
+        if p.is_file() and HOOK_MARK in read_raw(p) and OLD_GITKIT in read_raw(p):
+            print(f"WARN {p} still calls the removed {OLD_GITKIT} and now fails every commit; "
+                  f"run: python {KIT / 'tools' / 'install.py'} {repo} --git-hooks")
+            code = 2
+    return code
+
+
+PLUGIN_ID = "commit-commands@claude-plugins-official"
+PLUGIN_INSTALL = f"claude plugin install {PLUGIN_ID} --scope project"
+
+
+def merge_plugin(path: Path) -> tuple[str, int]:
+    """enabledPlugins[PLUGIN_ID] = true in a Claude Code settings file (docs: settings, plugins/loading); the rest is kept.
+    The key only enables it: every person still installs the plugin on their machine (PLUGIN_INSTALL)."""
+    manual = f'add "enabledPlugins": {{"{PLUGIN_ID}": true}} to it by hand'
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError as e:
+        return f"WARN {path} is not valid JSON ({e}) — left untouched; {manual}", 2
+    enabled = data.get("enabledPlugins", {}) if isinstance(data, dict) else None
+    if not isinstance(enabled, dict):
+        return f"WARN {path} has an unexpected enabledPlugins layout — left untouched; {manual}", 2
+    if enabled.get(PLUGIN_ID) is True:
+        return f"keep {path} ({PLUGIN_ID} already enabled)", 0
+    if PLUGIN_ID in enabled:
+        return f"keep {path} ({PLUGIN_ID} is switched off there; left as you set it)", 0
+    data.setdefault("enabledPlugins", {})[PLUGIN_ID] = True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    return f"plugin {path} (enabledPlugins: {PLUGIN_ID})", 0
 
 
 def copy_guard_scripts(repo: Path) -> str:
@@ -567,6 +652,16 @@ def guard_prereqs(jq: str = "jq") -> str | None:
     return None
 
 
+def exclude_local_settings(repo: Path) -> None:
+    """Personal trial: keep .claude/settings.local.json out of git without touching the shared .gitignore."""
+    excl = git_out(repo, "rev-parse", "--git-path", "info/exclude")
+    if excl:
+        path = Path(excl) if Path(excl).is_absolute() else repo / excl
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if append_lines(path, [".claude/settings.local.json"]):
+            print(f"exclude .claude/settings.local.json in {path} (personal, not committed)")
+
+
 def install_guards(repo: Path, team: bool, ask=None) -> int:
     code = 0
     print(copy_guard_scripts(repo))
@@ -581,13 +676,8 @@ def install_guards(repo: Path, team: bool, ask=None) -> int:
     code = max(code, c)
     for note in notes:
         print(note)
-    if not team:  # personal trial: keep the file out of git without touching the shared .gitignore
-        excl = git_out(repo, "rev-parse", "--git-path", "info/exclude")
-        if excl:
-            path = Path(excl) if Path(excl).is_absolute() else repo / excl
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if append_lines(path, [".claude/settings.local.json"]):
-                print(f"exclude .claude/settings.local.json in {path} (personal, not committed)")
+    if not team:
+        exclude_local_settings(repo)
     if append_lines(repo / ".gitattributes", [GUARD_EOL]):
         print(f"update {repo / '.gitattributes'} ({GUARD_EOL}; then: git add --renormalize .agentkit/scripts)")
     if append_lines(repo / ".gitignore", GUARD_IGNORE):
@@ -631,14 +721,14 @@ def main() -> int:
     ap.add_argument("--guards", action="store_true",
                     help="install the computational guards: scripts, Claude Code hooks, pre-push (needs bash, git, jq, python)")
     ap.add_argument("--team", action="store_true",
-                    help="with --guards: write the Claude Code hooks to .claude/settings.json (shared) instead of "
-                         "the uncommitted .claude/settings.local.json")
+                    help="write the Claude Code settings (commit-commands plugin; with --guards also the hooks) to "
+                         ".claude/settings.json (shared) instead of the uncommitted .claude/settings.local.json")
     a = ap.parse_args()
 
     if a.user and (a.git_hooks or a.uninstall_git_hooks or a.guards):
         ap.error("git hooks and guards belong to a repo; give a repo path instead of --user")
-    if a.team and not a.guards:
-        ap.error("--team only applies to --guards")
+    if a.team and a.user:
+        ap.error("--team belongs to a repo; give a repo path instead of --user")
     if a.with_ is not None:
         print("BLOCK: --with was removed in 0.5.0 (every skill is core now), see CHANGELOG. Nothing was installed.")
         return 1
@@ -722,11 +812,20 @@ def main() -> int:
     if not (repo / "FAILURES.md").exists():  # AGENTS.md asks for an entry per corrected mistake
         write_raw(repo / "FAILURES.md", failures_header())
         print(f"create {repo / 'FAILURES.md'}")
-    code = mig
+    code = max(mig, warn_old_hooks(repo) if not a.git_hooks else 0)
+    settings = repo / ".claude" / ("settings.json" if a.team else "settings.local.json")
+    msg, c = merge_plugin(settings)
+    print(msg)
+    code = max(code, c)
+    if not a.team:
+        exclude_local_settings(repo)
+    print(f"NOTE the commit/push/PR workflow is the commit-commands plugin; each person installs it once: {PLUGIN_INSTALL}")
     if a.hooks:
-        msg, code = merge_hook(repo)
+        msg, c = merge_hook(repo)
         print(msg)
+        code = max(code, c)
     if a.git_hooks:
+        print(copy_gitkit(repo))
         code = max(code, git_hooks(repo, install_git_hook))
     if a.guards:
         code = max(code, install_guards(repo, a.team))
