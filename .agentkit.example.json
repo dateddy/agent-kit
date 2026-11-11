@@ -19,6 +19,8 @@
     "commit_tasks": false,
     "max_decision_chars": 600,
     "max_decision_lines": 10,
+    "_max_knowledge_facts": "nt brief prints every fact of notes/knowledge.md; above this many it warns to split the file by area",
+    "max_knowledge_facts": 20,
     "base_branch": null
   },
 

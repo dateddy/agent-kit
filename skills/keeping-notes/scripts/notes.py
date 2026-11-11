@@ -36,6 +36,8 @@ DEFAULTS = {
     # ~600 chars ≈ 150 tokens: forces a decision to be a conclusion, not a transcript
     "max_decision_chars": 600,
     "max_decision_lines": 10,
+    # knowledge.md facts are printed by every `brief`; past this many the brief costs too much per session
+    "max_knowledge_facts": 20,
     "base_branch": None,
 }
 STATUSES = ("active", "blocked", "done", "abandoned")
@@ -239,6 +241,23 @@ def cmd_task(a, r, cfg, base):
     return WARN if warns else OK
 
 
+def knowledge_lines(path: Path, limit: int) -> list[str]:
+    """The fact lines (`- …`) of notes/knowledge.md for `brief`; the header and blank lines are not printed.
+
+    Over `limit` facts a WARN line is added (text only: brief keeps exit 0 so a SessionStart hook never fails on it).
+    """
+    if not path.is_file():
+        return []
+    facts = [l.rstrip() for l in path.read_text(encoding="utf-8", errors="replace").splitlines() if l.startswith("- ")]
+    if not facts:
+        return []
+    out = [f"KNOWLEDGE {len(facts)} ({path.name}: repo and environment facts)", *facts]
+    if len(facts) > limit:
+        out.append(f"WARN: {path.name} has {len(facts)} facts (> {limit}); consider scoped format: one file per area, "
+                   "only the area at hand in the brief")
+    return out
+
+
 def cmd_brief(a, r, cfg, base):
     b = current_branch()
     lines = []
@@ -263,6 +282,7 @@ def cmd_brief(a, r, cfg, base):
     ch = [l[3:] for l in st.splitlines() if len(l) > 3]  # keep leading status columns intact
     if ch:
         lines.append(f"UNCOMMITTED {len(ch)}: " + ", ".join(ch[:8]) + (" …" if len(ch) > 8 else ""))
+    lines += knowledge_lines(base / "knowledge.md", cfg["max_knowledge_facts"])
     decs = [e for e in parse_decisions(base / "decisions.md") if not e["superseded_by"]]
     topics = set(a.topic or [])
     rel = [e for e in decs if e["branch"] == b or e["topic"] in topics]

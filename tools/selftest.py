@@ -1283,6 +1283,57 @@ def migrate_rerun_no_change(t: T):
     check("remove " not in out, f"second run removed something: {out[-300:]}")
 
 
+# ================================================================ KN notes/knowledge.md in nt brief
+KNOW_HEAD = "# Knowledge\n\nFacts about this repo.\nLine format: `- <fact>; <right way> (verified YYYY-MM-DD: <evidence>)`.\n\n"
+
+
+def knowledge_repo(t: T, facts: int, name: str = "kn") -> Path:
+    d = t.repo(name)
+    kit("nt", "init", cwd=d)
+    body = "".join(f"- fact {i}; way {i} (verified 2026-11-11: cmd {i})\n" for i in range(1, facts + 1))
+    t.write(d, {"notes/knowledge.md": KNOW_HEAD + body})
+    return d
+
+
+@scenario("KN1", "nt brief prints the facts of notes/knowledge.md after the task part, without the header")
+def brief_shows_knowledge(t: T):
+    d = knowledge_repo(t, 3)
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0, f"exit {code}: {out[:300]}")
+    check("KNOWLEDGE 3" in out and "- fact 1; way 1" in out and "- fact 3; way 3" in out, f"facts missing: {out[:500]}")
+    check("Line format" not in out and "WARN" not in out, f"header or a WARN leaked: {out[:500]}")
+    check(out.index("TASK") < out.index("KNOWLEDGE"), "knowledge must come after the task part")
+    d2 = t.repo("kn-none")
+    kit("nt", "init", cwd=d2)
+    code, out = kit("nt", "brief", cwd=d2)
+    check(code == 0 and "KNOWLEDGE" not in out, f"no file, no section: {out[:300]}")
+    t.write(d2, {"notes/knowledge.md": KNOW_HEAD})
+    code, out = kit("nt", "brief", cwd=d2)
+    check(code == 0 and "KNOWLEDGE" not in out, f"header only, no section: {out[:300]}")
+
+
+@scenario("KN2", "nt brief WARNs 'consider scoped format' above 20 facts (still exit 0, so a SessionStart hook never fails)")
+def brief_warns_knowledge_over_20(t: T):
+    d = knowledge_repo(t, 20)
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0 and "KNOWLEDGE 20" in out and "WARN" not in out, f"20 facts are fine: exit {code}: {out[-300:]}")
+    d = knowledge_repo(t, 21, "kn21")
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0 and "WARN" in out and "consider scoped format" in out and "21 facts" in out, f"exit {code}: {out[-400:]}")
+    t.write(d, {".agentkit.json": json.dumps({"notes": {"max_knowledge_facts": 30}})})
+    code, out = kit("nt", "brief", cwd=d)
+    check("WARN" not in out, f"the limit is configurable: {out[-300:]}")
+
+
+@scenario("KN3", "the real repo's seed knowledge.md follows the line format and the installer's header has no fact lines")
+def knowledge_seed_format(t: T):
+    line = re.compile(r"^- .+; .+ \(verified \d{4}-\d{2}-\d{2}: .+\)$")
+    facts = [l for l in (KIT / "notes/knowledge.md").read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
+    check(len(facts) == 5, f"seed facts: {len(facts)}")
+    bad = [l[:80] for l in facts if not line.match(l)]
+    check(not bad, f"lines off the format: {bad}")
+
+
 # ================================================================ PF plan.py field vs the 0.4.0 plan-step.sh
 PARITY_PLAN = """# Plan: parity
 Constraints: none

@@ -21,6 +21,9 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 ## Failure log
 - Every mistake of yours that the user corrects gets an entry in `FAILURES.md` (date, what happened, root cause, control). The entry must name a control; prefer a script or hook that always runs over a new instruction line.
 
+## Knowledge
+- When it took you 3 or more tries to find the right way with this environment or a tool, or the user corrects a wrong claim you made about the repo: add one line to `notes/knowledge.md` (`- <fact>; <right way> (verified YYYY-MM-DD: <command or evidence>)`) and say so in one line in your reply. Never record bugs (dbg), decisions (`nt decide`) or your own mistakes (FAILURES.md) there.
+
 ## Scripts decide, you write
 - Exit codes: 0 OK · 2 WARN → show the user and wait for yes · 1 BLOCK → fix and re-run. Never bypass a BLOCK.
 - Destructive or irreversible commands (reset --hard, force push, deleting branches/files, dropping stashes): quote the exact command and wait for an explicit yes. With the guards installed (`install.py --guards`) `guard-git.sh` enforces this: it asks the user, and blocks a force push to a protected branch.
