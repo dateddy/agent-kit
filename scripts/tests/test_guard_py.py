@@ -989,6 +989,178 @@ class PathTests(unittest.TestCase):
         self.assertEqual((rc, out, err), (0, b"", b""))                               # inside the repo stays allowed
 
 
+class BashFsTests(unittest.TestCase):
+    """Writes and deletes outside the repo, redirects, cd tracking and fs.deny_read in `guard.py bash`."""
+
+    NO_ALLOW = {"fs": {"allow_write": []}}      # nothing outside the repo is allowed, whatever the OS scratch directory is
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.tmp = os.path.realpath(cls.tmpdir.name)
+        cls.repo = os.path.join(cls.tmp, "repo")
+        os.makedirs(os.path.join(cls.repo, "sub"))
+        cls.env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        cls.env.pop("AGENTKIT_HEADLESS", None)
+        subprocess.run(["git", "init", "-q"], cwd=cls.repo, env=cls.env, check=True, capture_output=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    def judge(self, cmd, data=None, cwd=None):
+        j = guard.Judge(guard.Config(self.NO_ALLOW if data is None else data), "feat", cwd or self.repo)
+        j.scan(cmd, 0)
+        return j.decision()
+
+    def kinds(self, cmds, want, data=None, cwd=None):
+        for cmd in cmds:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.judge(cmd, data, cwd).kind, want)
+
+    def test_write_targets_table(self):
+        table = [
+            ("rm", ["-rf", "a", "b"], [("a", True), ("b", True)]),
+            ("rm", ["--", "-f"], [("-f", True)]),
+            ("rmdir", ["d"], [("d", True)]),
+            ("touch", ["-d", "yesterday", "f"], [("f", False)]),
+            ("mkdir", ["-p", "-m", "755", "d"], [("d", False)]),
+            ("chmod", ["+x", "f", "g"], [("f", False), ("g", False)]),
+            ("chmod", ["-R", "755", "d"], [("d", False)]),
+            ("chown", ["me", "f"], [("f", False)]),
+            ("truncate", ["-s", "0", "f"], [("f", True)]),
+            ("tee", ["-a", "f", "g"], [("f", False), ("g", False)]),
+            ("mv", ["a", "b"], [("a", True), ("b", True)]),
+            ("mv", ["-t", "d", "a"], [("a", True), ("d", True)]),
+            ("cp", ["a", "b"], [("b", False)]),
+            ("cp", ["-r", "a", "b", "dir/"], [("dir/", False)]),
+            ("cp", ["-t", "d", "a", "b"], [("d", False)]),
+            ("cp", ["-rt", "d", "a"], [("d", False)]),
+            ("cp", ["a"], []),
+            ("ln", ["-s", "target", "link"], [("link", False)]),
+            ("install", ["-m", "755", "a", "dst"], [("dst", False)]),
+            ("dd", ["if=a", "of=b", "bs=1"], [("b", True)]),
+            ("sed", ["-i", "s/a/b/", "f", "g"], [("f", True), ("g", True)]),
+            ("sed", ["-i.bak", "-e", "s/a/b/", "f"], [("f", True)]),
+            ("sed", ["-ni", "p", "f"], [("f", True)]),
+            ("sed", ["--in-place=.b", "s/a/b/", "f"], [("f", True)]),
+            ("sed", ["-n", "p", "f"], []),
+            ("sed", ["s/a/b/", "f"], []),
+            ("sed", ["-ne", "s/i/b/p", "f"], []),                                     # i inside the script is not -i
+            ("perl", ["-pi", "-e", "s/a/b/", "f"], [("f", True)]),
+            ("perl", ["-i.bak", "-pe", "s/a/b/", "f"], [("f", True)]),
+            ("perl", ["-Mstrict", "-e", "1", "f"], []),
+            ("perl", ["-ne", "print", "f"], []),
+            ("ls", ["-la", "x"], []),
+            ("cat", ["x"], []),
+        ]
+        for prog, args, want in table:
+            with self.subTest(prog=prog, args=args):
+                self.assertEqual(guard.write_targets(prog, args), want)
+
+    def test_bash_write_table(self):
+        self.kinds(["rm -rf build", "rm -rf ./dist ./build sub/x", "rm -rf sub/../x", "touch new/f", "mkdir -p a/b/c", "cp a b",
+                    "cp /etc/passwd ./x", "mv a sub/b", "chmod +x sub/run.sh", "tee out.log", "sed -i s/a/b/ f.txt", "dd if=/dev/zero of=./f",
+                    "ln -s a l", "install -m 755 a bin", "ls ../x", "cat ../x", "sed s/a/b/ ../o.txt", "sed -n p ../x", "echo hi"], "allow")
+        self.kinds(["rm -rf /etc/x", "rm -rf ../x", "rm -rf ~/x", "rm -rf $HOME/x", "mv a ../../x", "mv /outside/a b", "cp a ../../x",
+                    "dd if=a of=/x", "sed -i s/a/b/ ../o.txt", "perl -pi -e s/a/b/ ../o.txt", "tee -a ~/x", "touch ../x", "mkdir -p ../x",
+                    "chmod +x ../x", "ln -s a ../l", "install -m 755 a ../bin/", "install -t ../d a", "truncate -s 0 ../f", "rmdir ../d",
+                    "sudo rm -rf /etc/x", "FOO=1 rm -rf /etc/x", "cd sub && rm -rf ../../x", "echo a && rm -rf /etc/x",
+                    'bash -c "rm -rf /etc/x"'], "ask")
+        d = self.judge("rm -rf ../x")
+        self.assertTrue(d.message.startswith("Write outside the repo: "), d.message)
+        self.assertIn(guard.resolve_path("../x", self.repo), d.message)               # the absolute path is shown
+        self.kinds(["cp a /tmp/b", "rm -rf /tmp/x", "touch ~/.cache/x/y", "mkdir -p " + guard.tempfile.gettempdir().replace("\\", "/") + "/zz"],
+                   "allow", data={})                                                   # fs.allow_write defaults
+
+    def test_redirect_table(self):
+        self.kinds(["echo x > /dev/null", "echo x 2> /dev/null", "echo x &> /dev/null", "echo x >> /dev/stderr", "echo x > /dev/stdout",
+                    "echo x >out.txt", "echo x > sub/f", "echo x 2>&1", "echo x 1>&2", "echo x >&2", "cat < ../x", "echo x >> $LOG"], "allow")
+        self.kinds(["echo x > ~/x", "echo x >> ~/x", "echo x 2> ../e", "echo x &> ../../o", "echo x >| ../f", "> ../empty", "echo x > $F",
+                    "echo x > ${OUT}/f"], "ask")
+        self.kinds(["echo x 2> /tmp/e", "echo x > /tmp/x"], "allow", data={})
+        self.assertEqual(self.judge("echo x > ../out").message.split(":")[0], "Write outside the repo")
+
+    def test_unresolved_variables(self):
+        self.kinds(["rm -rf $BUILD_DIR", "rm -rf ${BUILD}/x", "rm -rf $(pwd)/x", "rm -rf `pwd`/x", "mv a $DEST", "truncate -s 0 $F",
+                    "dd of=$DEV if=a", "sed -i s/a/b/ $F"], "ask")
+        self.kinds(["touch $F", "mkdir -p $OUT", "cp a $DEST/", "chmod +x $F", "tee $LOG", "ls $X"], "allow")   # only destructive commands ask
+        d = self.judge("rm -rf $BUILD_DIR")
+        self.assertEqual(d.message, "Destructive command 'rm': its target has a variable the guard cannot resolve: $BUILD_DIR. "
+                                    "Approve only if the user asked for it.")
+        self.kinds(["rm -rf $BUILD_DIR"], "block", data={"guards": {"destructive": "block"}})
+        self.kinds(["rm -rf $BUILD_DIR"], "allow", data={"guards": {"destructive": "allow"}})
+
+    def test_cd_tracking(self):
+        self.kinds(["cd sub && rm -rf x", "cd sub && cd .. && rm -rf x", "cd /dev && echo x > /dev/null"], "allow")
+        self.kinds(["cd .. && rm -rf x", "cd sub && cd ../.. && rm -rf x", "cd .. ; touch x", "cd ../outside && rm -rf /etc/x"], "ask")
+        self.kinds(["cd $X && rm -rf y", "cd - && rm -rf y", "cd && rm -rf y", "cd `pwd` && rm -rf y", "pushd .. && rm -rf y"], "ask")   # cwd lost
+        self.kinds(["cd $X && touch y", "cd $X && mkdir -p y"], "allow")                                 # not destructive: nothing to ask about
+        self.kinds(["cd $X && cd /tmp/z && rm -rf y"], "allow", data={})                                  # an absolute cd finds the cwd again
+        self.kinds(["cd $X && cd " + guard.tempfile.gettempdir().replace("\\", "/") + " && rm -rf y"], "allow", data={})
+        self.kinds(["cd -P sub && rm -rf x"], "allow")
+        self.kinds(["cd /tmp/z && rm -rf y"], "ask")                                                      # no allow_write: /tmp/z is outside
+        self.kinds(["rm -rf x"], "allow", cwd=os.path.join(self.repo, "sub"))                            # the start cwd comes from the caller
+        self.kinds(["rm -rf ../x"], "allow", cwd=os.path.join(self.repo, "sub"))                         # sub/../x is still in the repo
+        self.kinds(["rm -rf ../../x"], "ask", cwd=os.path.join(self.repo, "sub"))
+
+    def test_deny_read_table(self):
+        self.kinds(["cat ~/.ssh/id_rsa", "cat ~/.ssh/config", "cat ~/.aws/credentials", "cat ~/.config/gh/hosts.yml", "cat ~/.gnupg/x",
+                    "cat .env", "cat sub/.env", "cat .env.local", "cat server.pem", "cat ../k/id_rsa.pub", "git add .env",
+                    'bash -c "cat ~/.aws/credentials"', "cat $HOME/.ssh/id_rsa", "head -n1 --file=~/.ssh/id_rsa", "cat < ~/.ssh/id_rsa",
+                    "echo x > .env", "cd sub && cat .env"], "block", data={})
+        self.kinds(["cat .env.example", "cat sub/.env.sample", "cat .env.template", "echo .envrc", "ls ~/.ssh", "cat README.md",
+                    "cat ~/.sshconfig", "git commit -m 'drop .env handling'", "cat envfile", "ls ~/.cache"], "allow", data={})
+        d = self.judge("cat ~/.ssh/id_rsa", data={})
+        self.assertTrue(d.message.startswith("BLOCK: reads a protected file: "), d.message)
+        self.assertIn(guard.resolve_path("~/.ssh/id_rsa", self.repo), d.message)
+        mine = {"fs": {"deny_read": ["**/secret.txt", "~/vault/**"], "allow_read": ["**/public/secret.txt"]}}
+        self.kinds(["cat secret.txt", "cat sub/secret.txt", "cat ~/vault/a"], "block", data=mine)
+        self.kinds(["cat public/secret.txt", "cat .env", "cat ~/.ssh/id_rsa"], "allow", data=mine)           # a custom list replaces the default
+        self.kinds(["cat .env"], "allow", data={"fs": {"deny_read": []}})
+
+    def test_fs_rules_follow_the_policy_and_headless(self):
+        block = {"fs": {"outside_repo_write": "block", "allow_write": []}}
+        d = self.judge("rm -rf /etc/x", data=block)
+        self.assertEqual(d.kind, "block")
+        self.assertTrue(d.message.startswith("BLOCK: write outside the repo: "), d.message)
+        self.kinds(["echo x > ~/x", "cp a ../b"], "block", data=block)
+        self.kinds(["rm -rf build", "echo x > out"], "allow", data=block)
+        old = os.environ.get("AGENTKIT_HEADLESS")
+        os.environ["AGENTKIT_HEADLESS"] = "1"
+        try:
+            d = guard.finalize(self.judge("rm -rf /etc/x"))
+            self.assertEqual(d.kind, "block")
+            self.assertIn("AGENTKIT_HEADLESS=1", d.message)
+        finally:
+            if old is None:
+                os.environ.pop("AGENTKIT_HEADLESS", None)
+            else:
+                os.environ["AGENTKIT_HEADLESS"] = old
+
+    def run_hook(self, command, cwd=None, process_cwd=None):
+        payload = {"tool_input": {"command": command}}
+        if cwd:
+            payload["cwd"] = cwd
+        p = subprocess.run([sys.executable, GUARD, "bash"], input=json.dumps(payload).encode(), capture_output=True,
+                           cwd=process_cwd or self.repo, env=self.env)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_hook_json_cwd_is_used(self):
+        with open(os.path.join(self.repo, ".agentkit.json"), "w", encoding="utf-8") as f:
+            json.dump(self.NO_ALLOW, f)
+        rc, out, err = self.run_hook("echo x > ../out.txt")
+        self.assertEqual(rc, 0)
+        self.assertIn(b'"permissionDecision":"ask"', out)
+        rc, out, err = self.run_hook("echo x > ../out.txt", cwd=os.path.join(self.repo, "sub"))          # relative to the hook cwd: sub/../out.txt
+        self.assertEqual((rc, out, err), (0, b"", b""))
+        rc, out, err = self.run_hook("cat ~/.ssh/id_rsa")
+        self.assertEqual((rc, out), (2, b""))
+        self.assertTrue(err.startswith(b"BLOCK: reads a protected file: "), err)
+        rc, out, err = self.run_hook("ls -la")                                                           # nothing relevant: allowed at once
+        self.assertEqual((rc, out, err), (0, b"", b""))
+
+
 class WrapperTests(unittest.TestCase):
     """guard-git.sh picks the interpreter: python3, python, py -3; the Microsoft Store stub (WindowsApps) is skipped."""
 

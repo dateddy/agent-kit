@@ -390,9 +390,14 @@ class Judge:
     command line moves it. The first block wins, then the first ask (see decision()).
     """
 
-    def __init__(self, cfg: Config, branch: str) -> None:
+    def __init__(self, cfg: Config, branch: str, cwd: Optional[str] = None) -> None:
         self.cfg = cfg
         self.branch = branch
+        self.cwd0 = cwd or os.getcwd()  # where the command starts; `cd <literal>` moves self.cwd
+        self.cwd = self.cwd0
+        self.cwd_known = True
+        self._repo: Optional[RepoInfo] = None
+        self._rules: Optional[FsRules] = None
         self.first_block: Optional[Decision] = None
         self.first_ask: Optional[Decision] = None
 
@@ -417,8 +422,8 @@ class Judge:
 
     def scan(self, cmd: str, depth: int) -> None:
         """Judge every git command in cmd, in order."""
-        for words, _redirs, op in seg_ops(cmd):
-            self.check_segment(depth, words, op)
+        for words, redirs, op in seg_ops(cmd):
+            self.check_segment(depth, words, op, redirs)
 
     def track_switch(self, sub: str, args: list[str]) -> None:
         """Move self.branch the way `git switch/checkout <args>` would."""
@@ -446,14 +451,85 @@ class Judge:
         elif target and (sub == "switch" or branch_exists(target)):
             self.branch = target
 
-    def check_segment(self, depth: int, words: list[str], op: str = "") -> None:
+    # ---- fs rules (1b): writes outside the repo, protected files, cd tracking
+    def repo(self) -> "RepoInfo":
+        if self._repo is None:
+            self._repo = RepoInfo(self.cwd0)
+        return self._repo
+
+    def rules(self) -> "FsRules":
+        if self._rules is None:
+            self._rules = FsRules(self.cfg, self.repo())
+        return self._rules
+
+    def do_cd(self, args: list[str]) -> None:
+        """Follow `cd <literal>`; a variable, `cd -` or a bare `cd` makes the cwd unknown until the next absolute cd."""
+        target = next((a for a in args if not a.startswith("-") or a == "-"), "")
+        if not target or target == "-" or _has_variable(target):
+            self.cwd_known = False
+        elif self.cwd_known or _anchored(target):
+            self.cwd = resolve_path(target, self.cwd)
+            self.cwd_known = True
+
+    def check_target(self, target: str, label: str, destructive: bool) -> None:
+        """A path a command writes or deletes. Unresolvable targets matter only for destructive commands (ask)."""
+        if not target or target in _DEVICE_OK:
+            return
+        if _has_variable(target):
+            if destructive:
+                self.record(_destructive(self.cfg, label, f"its target has a variable the guard cannot resolve: {target}"))
+            return
+        if not self.cwd_known and not _anchored(target):
+            if destructive:
+                self.record(_destructive(self.cfg, label, f"its target '{target}' is relative to a directory the guard lost track of (cd with a variable or -)"))
+            return
+        self.record(write_decision(resolve_path(target, self.cwd), self.repo(), self.cfg, self.rules()))
+
+    def check_reads(self, words: list[str]) -> None:
+        """Any word that resolves to a path matching fs.deny_read (and not fs.allow_read) is blocked."""
+        for word in words:
+            if word.startswith("-") and "=" not in word:
+                continue
+            cands = [word, word.split("=", 1)[1]] if word.startswith("-") else [word]
+            for c in cands:
+                if not c or not _pathlike(c) or _has_variable(c) or (not self.cwd_known and not _anchored(c)):
+                    continue
+                path = resolve_path(c, self.cwd)
+                if self.rules().denies_read(path):
+                    self.record(_block(f"BLOCK: reads a protected file: {path} (fs.deny_read). The user has to read it themselves, "
+                                       "or take it out of fs.deny_read / add it to fs.allow_read."))
+                    return
+
+    def check_fs(self, w: list[str], i: int, redirs: list[tuple[str, str]], op: str = "") -> None:
+        """The fs rules for the command that starts at w[i]; redirs are its output redirects; op ends the segment."""
+        prog = _base(w[i])
+        if prog == "cd":
+            self.do_cd(w[i + 1:])
+            return
+        if prog in ("pushd", "popd"):
+            self.cwd_known = False
+            return
+        for t, destructive in write_targets(prog, w[i + 1:]):
+            self.check_target(t, prog, destructive)
+        if op == "`" and prog in _DESTRUCTIVE_PROGS:  # the lexer cuts a command at a backtick: what follows is not seen
+            self.record(_destructive(self.cfg, prog, "a command substitution (`...`) may supply its target, which the guard cannot resolve"))
+        self.check_reads(w[i:] + [t for _, t in redirs])
+
+    def check_redirects(self, redirs: list[tuple[str, str]]) -> None:
+        for op, target in redirs:
+            self.check_target(target, f"redirect {op}", destructive=op not in (">>", "2>>", "&>>"))
+
+    def check_segment(self, depth: int, words: list[str], op: str = "", redirs: Optional[list[tuple[str, str]]] = None) -> None:
         """Judge one command; op is the operator that ends it (| |& && ; ...), "" for the last one."""
         w = words
         i = 0
         while i < len(w) and (_ENV_ASSIGN.match(w[i]) or w[i] in _SKIP_WORDS):
             i += 1
+        if redirs:
+            self.check_redirects(redirs)
         if i >= len(w):
             return
+        self.check_fs(w, i, redirs or [], op)
         prog = w[i].rsplit("/", 1)[-1]
         if op in ("|", "|&") and is_verify_command(w[i:]):
             self.record(guard_verify_pipe())
@@ -753,6 +829,120 @@ def finalize(d: Decision) -> Decision:
     return d
 
 
+_DESTRUCTIVE_PROGS = frozenset(("rm", "rmdir", "shred", "unlink", "mv", "truncate", "dd"))
+_DEVICE_OK = frozenset(("/dev/null", "/dev/stdout", "/dev/stderr"))
+_SECRET_HINT = re.compile(r"\.env|\.pem|id_rsa", re.I)
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+def _has_variable(t: str) -> bool:
+    """t holds a shell variable or command substitution the guard cannot expand (a leading $HOME is fine)."""
+    for pre in ("${HOME}", "$HOME"):
+        if t.startswith(pre) and (len(t) == len(pre) or t[len(pre)] in "/\\"):
+            t = t[len(pre):]
+            break
+    return "$" in t or "`" in t
+
+
+def _anchored(t: str) -> bool:
+    """t does not depend on the current directory."""
+    return t.startswith(("/", "~", "$HOME", "${HOME}")) or bool(_DRIVE.match(t))
+
+
+def _pathlike(c: str) -> bool:
+    return "/" in c or "\\" in c or "." in c or c.startswith("~") or bool(_SECRET_HINT.search(c))
+
+
+def _operands(args: list[str], value_flags: frozenset = frozenset()) -> list[str]:
+    """Non-option arguments. Options in value_flags take the next argument (also at the end of a short bundle: -ne script)."""
+    ops: list[str] = []
+    k = 0
+    dd = False
+    while k < len(args):
+        a = args[k]
+        k += 1
+        if dd:
+            ops.append(a)
+        elif a == "--":
+            dd = True
+        elif a.startswith("-") and len(a) > 1:
+            if a in value_flags or (not a.startswith("--") and len(a) > 2 and "-" + a[-1] in value_flags):
+                k += 1
+        else:
+            ops.append(a)
+    return ops
+
+
+def _target_dir(args: list[str]) -> str:
+    """The directory given with -t / --target-directory (cp, mv, ln, install), "" if none."""
+    for k, a in enumerate(args):
+        if a in ("-t", "--target-directory"):
+            return args[k + 1] if k + 1 < len(args) else ""
+        if a.startswith("--target-directory="):
+            return a.split("=", 1)[1]
+        if a.startswith("-t") and not a.startswith("--") and len(a) > 2:
+            return a[2:]
+        if a.startswith("-") and not a.startswith("--") and a.endswith("t") and len(a) > 2:  # -rt DIR
+            return args[k + 1] if k + 1 < len(args) else ""
+    return ""
+
+
+def _inplace(args: list[str], stop: str, long_name: str = "--in-place") -> bool:
+    """sed/perl in-place switch: -i, -i.bak, -ni ...; a short bundle ends at a switch that takes the rest as its value."""
+    for a in args:
+        if a == long_name or a.startswith(long_name + "="):
+            return True
+        if a.startswith("-") and not a.startswith("--"):
+            for ch in a[1:]:
+                if ch == "i":
+                    return True
+                if ch in stop:
+                    break
+    return False
+
+
+_CP_VALUE = frozenset(("-t", "--target-directory", "-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"))
+
+
+def write_targets(prog: str, args: list[str]) -> list[tuple[str, bool]]:
+    """(path, destructive) for each path that program `prog` writes or deletes. destructive: an unresolved path is asked about."""
+    if prog in ("rm", "rmdir", "shred", "unlink"):
+        return [(t, True) for t in _operands(args)]
+    if prog == "touch":
+        return [(t, False) for t in _operands(args, frozenset(("-d", "-t", "-r", "--date", "--reference")))]
+    if prog == "mkdir":
+        return [(t, False) for t in _operands(args, frozenset(("-m", "--mode")))]
+    if prog in ("chmod", "chown", "chgrp"):
+        ops = _operands(args)
+        return [(t, False) for t in (ops if any(a.startswith("--reference") for a in args) else ops[1:])]
+    if prog == "truncate":
+        return [(t, True) for t in _operands(args, frozenset(("-s", "-r", "--size", "--reference")))]
+    if prog == "tee":
+        return [(t, False) for t in _operands(args)]
+    if prog == "mv":
+        out = [(t, True) for t in _operands(args, _CP_VALUE)]
+        d = _target_dir(args)
+        return out + ([(d, True)] if d else [])
+    if prog in ("cp", "ln", "install"):
+        d = _target_dir(args)
+        ops = _operands(args, _CP_VALUE)
+        if d:
+            return [(d, False)]
+        return [(ops[-1], False)] if len(ops) >= 2 else []
+    if prog == "dd":
+        return [(a[3:], True) for a in args if a.startswith("of=")]
+    if prog == "sed" and _inplace(args, "efl"):
+        ops = _operands(args, frozenset(("-e", "-f", "-l", "--expression", "--file", "--line-length")))
+        scripted = any(a in ("-e", "-f", "--expression", "--file") or a.startswith(("--expression=", "--file=")) or
+                       (a.startswith("-") and not a.startswith("--") and a[-1] in "ef") for a in args)
+        return [(t, True) for t in (ops if scripted else ops[1:])]
+    if prog == "perl" and _inplace(args, "eEMmIdDVCxF0123456789"):
+        ops = _operands(args, frozenset(("-e", "-E")))
+        scripted = any(a in ("-e", "-E") or (a.startswith("-") and not a.startswith("--") and a[-1] in "eE") for a in args)
+        return [(t, True) for t in (ops if scripted else ops[1:])]
+    return []
+
+
 # ---------------------------------------------------------------- paths and the fs rules (1b)
 IS_NT = os.name == "nt"
 _MSYS_DRIVE = re.compile(r"^/([A-Za-z])(?=/|$)")
@@ -942,24 +1132,28 @@ def ask_json(reason: str) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
 
 
-_RELEVANT = re.compile(r"git|verify|\bvf\b")  # a command without these words has nothing for the rules to judge
+# a command without any of these has nothing for the rules to judge: git, verify, a redirect, a path-like word, a writing program
+_RELEVANT = re.compile(r"git|verify|\bvf\b|>|[/\\~.]|\b(rm|rmdir|mv|cp|ln|touch|mkdir|chmod|chown|chgrp|truncate|tee|dd|install|sed|perl|cd|shred|unlink)\b")
 
 
 def cmd_bash(args: list[str]) -> int:
     """Judge a shell command given as arguments (BLOCK = exit 1) or as hook JSON on stdin (BLOCK = exit 2)."""
     block_rc = 1 if args else 2
     cfg = load_config()  # may warn on stderr, before anything is read (as sourcing lib.sh did)
+    cwd: Optional[str] = None
     if args:
         cmd = " ".join(args)
     else:
-        parsed = hook_command(sys.stdin.buffer.read())
+        raw = sys.stdin.buffer.read()
+        parsed = hook_command(raw)
         if parsed is None:
             _out(sys.stderr, NOT_HOOK_JSON + "\n")
             return block_rc
         cmd = parsed
+        cwd = _jq_tostring((hook_payload(raw) or {}).get("cwd") or "") or None
     if not _RELEVANT.search(cmd):  # nothing to judge: skip the git calls
         return 0
-    judge = Judge(cfg, current_branch())
+    judge = Judge(cfg, current_branch() if "git" in cmd else "", cwd)
     judge.scan(cmd, 0)
     d = finalize(judge.decision())
     if d.kind == "block":
