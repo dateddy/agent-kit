@@ -405,8 +405,8 @@ class Judge:
 
     def scan(self, cmd: str, depth: int) -> None:
         """Judge every git command in cmd, in order."""
-        for seg in segments(tokenize(cmd)):
-            self.check_segment(depth, seg)
+        for words, _redirs, op in seg_ops(cmd):
+            self.check_segment(depth, words, op)
 
     def track_switch(self, sub: str, args: list[str]) -> None:
         """Move self.branch the way `git switch/checkout <args>` would."""
@@ -434,7 +434,8 @@ class Judge:
         elif target and (sub == "switch" or branch_exists(target)):
             self.branch = target
 
-    def check_segment(self, depth: int, words: list[str]) -> None:
+    def check_segment(self, depth: int, words: list[str], op: str = "") -> None:
+        """Judge one command; op is the operator that ends it (| |& && ; ...), "" for the last one."""
         w = words
         i = 0
         while i < len(w) and (_ENV_ASSIGN.match(w[i]) or w[i] in _SKIP_WORDS):
@@ -442,6 +443,8 @@ class Judge:
         if i >= len(w):
             return
         prog = w[i].rsplit("/", 1)[-1]
+        if op in ("|", "|&") and is_verify_command(w[i:]):
+            self.record(guard_verify_pipe())
         if prog in _SHELLS:
             for j in range(i + 1, len(w)):
                 if (w[j] == "-c" or _SHELL_C_FLAG.fullmatch(w[j])) and j + 1 < len(w) and depth < MAX_DEPTH:
@@ -455,11 +458,14 @@ class Judge:
             return
         i += 1
         git_dir = ""
+        hooks_override = ""
         while i < len(w):
             if w[i] == "-C":
                 git_dir = w[i + 1] if i + 1 < len(w) else ""
                 i += 2
             elif w[i] in _GIT_SKIP2:
+                if w[i] == "-c" and i + 1 < len(w) and w[i + 1].lower().split("=", 1)[0] == "core.hookspath":
+                    hooks_override = w[i + 1]
                 i += 2
             elif w[i].startswith("-"):
                 i += 1
@@ -469,6 +475,8 @@ class Judge:
             return
         sub, args = w[i], w[i + 1:]
         b = self.branch if not git_dir else current_branch(git_dir)
+        if hooks_override:
+            self.record(_block(f"BLOCK: 'git -c {hooks_override}' redirects the git hooks. Do not bypass the hooks."))
         if sub in ("switch", "checkout"):
             if not git_dir:
                 self.track_switch(sub, args)
@@ -480,6 +488,11 @@ class Judge:
                 self.rule_commit(b)
         elif sub == "push":
             self.rule_push(b, args)
+        # 1b rules run last: where an older rule already asks, its message is the one shown
+        self.record(guard_hooks_bypass(sub, args))
+        self.record(guard_destructive(self.cfg, sub, args))
+        if sub == "push":
+            self.record(guard_force_push(self.cfg, b, args))
 
 
 # ---------------------------------------------------------------- rules (messages are verbatim from guard-git.sh)
@@ -525,8 +538,8 @@ def guard_commit(cfg: Config, b: str) -> Decision:
     return Decision("ask", f"Commit on protected branch '{b}'. Approve only if the user asked for it; otherwise create a task branch first.")
 
 
-def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
-    """`git push` that targets a protected branch (b is the branch the push is judged on)."""
+def _push_parse(args: list[str]) -> tuple[bool, list[str]]:
+    """(--all/--mirror given, refspecs) of `git push` arguments; the first operand is the remote."""
     remote = ""
     push_all = False
     skip = False
@@ -544,6 +557,12 @@ def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
             remote = a
         else:
             specs.append(a)
+    return push_all, specs
+
+
+def _push_hit(cfg: Config, b: str, args: list[str]) -> str:
+    """The protected branch a `git push` targets ("" when none); b is the branch the push is judged on."""
+    push_all, specs = _push_parse(args)
     hit = "every branch (--all/--mirror)" if push_all else ""
     if not specs:
         if b and cfg.is_protected(b):
@@ -559,6 +578,12 @@ def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
                 dst = dst[len("refs/heads/"):]
             if dst and cfg.is_protected(dst):
                 hit = dst
+    return hit
+
+
+def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
+    """`git push` that targets a protected branch (b is the branch the push is judged on)."""
+    hit = _push_hit(cfg, b, args)
     if not hit:
         return ALLOW
     policy = protected_policy(cfg)
@@ -567,6 +592,153 @@ def guard_push(cfg: Config, b: str, args: list[str]) -> Decision:
     if policy == "block":
         return _block(f"BLOCK: push to protected branch '{hit}' (git.protected_commit=block). Push a task branch and merge with --no-ff.")
     return Decision("ask", f"Push to protected branch '{hit}'. Approve only if the user asked for it; prefer pushing a task branch.")
+
+
+# ---------------------------------------------------------------- 1b rules: hooks, destructive git, force push, verify pipe
+_VALUE_NEXT = frozenset("mFcCto")  # short options whose value is the next argument unless it is attached (-m msg, -mmsg)
+_VALUE_STOP = frozenset("Su")  # short options with an optional attached value: the rest of the bundle belongs to it
+_LONG_VALUE = frozenset(("--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
+                         "--fixup", "--squash", "--cleanup", "--push-option", "--repo", "--receive-pack", "--exec"))
+_CONFIG_READ = frozenset(("--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch", "--unset", "--unset-all"))
+
+
+def parse_opts(args: list[str]) -> tuple[list[str], list[str], Optional[list[str]]]:
+    """(flags, operands, words after "--" or None) of git arguments.
+
+    Short bundles are split (-nm -> -n -m) and the value of an option that takes one is skipped, so
+    `commit -m -n` has no -n flag. Long flags keep their "=value".
+    """
+    flags: list[str] = []
+    operands: list[str] = []
+    after: Optional[list[str]] = None
+    k = 0
+    while k < len(args):
+        a = args[k]
+        k += 1
+        if a == "--":
+            after = list(args[k:])
+            break
+        if a.startswith("--"):
+            flags.append(a)
+            if "=" not in a and a in _LONG_VALUE and k < len(args):
+                k += 1
+        elif a.startswith("-") and len(a) > 1:
+            j = 1
+            while j < len(a):
+                ch = a[j]
+                flags.append("-" + ch)
+                j += 1
+                if ch in _VALUE_STOP:
+                    break
+                if ch in _VALUE_NEXT:
+                    if j >= len(a) and k < len(args):
+                        k += 1
+                    break
+        else:
+            operands.append(a)
+    return flags, operands, after
+
+
+def guard_hooks_bypass(sub: str, args: list[str]) -> Decision:
+    """--no-verify (commit -n too) and core.hooksPath changes turn the git hooks off."""
+    flags, operands, _ = parse_opts(args)
+    if "--no-verify" in flags or (sub == "commit" and "-n" in flags):
+        return _block(f"BLOCK: 'git {sub}' skips the git hooks (--no-verify / -n). Fix what the hook reports instead of bypassing it.")
+    if sub == "config" and not set(flags) & _CONFIG_READ and any(a.lower().split("=", 1)[0] == "core.hookspath" for a in operands):
+        return _block("BLOCK: 'git config core.hooksPath' redirects the git hooks. Do not bypass the hooks.")
+    return ALLOW
+
+
+def destructive_policy(cfg: Config) -> str:
+    """guards.destructive: "allow" | "block" | anything else means "ask"."""
+    v = cfg.cfg("guards.destructive", "ask")
+    return v if v in ("allow", "block") else "ask"
+
+
+def _destructive(cfg: Config, what: str, why: str) -> Decision:
+    policy = destructive_policy(cfg)
+    if policy == "allow":
+        return ALLOW
+    if policy == "block":
+        return _block(f"BLOCK: destructive command '{what}' ({why}) (guards.destructive=block).")
+    return Decision("ask", f"Destructive command '{what}': {why}. Approve only if the user asked for it.")
+
+
+def guard_destructive(cfg: Config, sub: str, args: list[str]) -> Decision:
+    """Git commands that throw work away. Which ones: see the table in README (Guards)."""
+    flags, operands, after = parse_opts(args)
+    fl = set(flags)
+    why = ""
+    if sub == "reset" and fl & {"--hard", "--merge", "--keep"}:
+        why = "discards changes in the working tree"
+    elif sub == "branch" and ("-D" in fl or (fl & {"-d", "--delete"} and fl & {"-f", "--force"})):
+        why = "deletes a branch even if it is not merged"
+    elif sub == "clean" and fl & {"-f", "--force"} and not fl & {"-n", "--dry-run"}:
+        why = "deletes untracked files"
+    elif sub == "stash" and operands[:1] in (["drop"], ["clear"]):
+        why = "drops stashed work"
+    elif sub == "checkout" and (after or "." in operands):
+        why = "overwrites files in the working tree"
+    elif sub == "restore" and (not fl & {"--staged", "-S"} or fl & {"--worktree", "-W"}):
+        why = "overwrites files in the working tree"
+    elif sub == "push" and (fl & {"--delete", "-d"} or any(s.startswith(":") for s in _push_parse(args)[1])):
+        why = "deletes a remote branch or tag"
+    elif sub in ("filter-branch", "filter-repo"):
+        why = "rewrites history"
+    elif sub == "update-ref" and "-d" in fl:
+        why = "deletes a ref"
+    elif sub == "reflog" and operands[:1] == ["expire"]:
+        why = "drops reflog entries"
+    elif sub == "gc" and "--prune=now" in fl:
+        why = "deletes unreachable objects at once"
+    return _destructive(cfg, f"git {sub}", why) if why else ALLOW
+
+
+def guard_force_push(cfg: Config, b: str, args: list[str]) -> Decision:
+    """A force push to a protected branch is always blocked; to any other branch it follows guards.destructive."""
+    flags, _, _ = parse_opts(args)
+    forced = any(f in ("-f", "--force", "--force-if-includes") or f.startswith("--force-with-lease") for f in flags)
+    forced = forced or any(s.startswith("+") for s in _push_parse(args)[1])
+    if not forced:
+        return ALLOW
+    hit = _push_hit(cfg, b, args)
+    if hit:
+        return _block(f"BLOCK: force push to protected branch '{hit}'. Push a task branch and merge with --no-ff.")
+    return _destructive(cfg, "git push --force", "rewrites the history of a remote branch")
+
+
+_VERIFY_NAMES = frozenset(("verify.py", "verify.sh", "vf"))
+
+
+def _base(word: str) -> str:
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def is_verify_command(words: list[str]) -> bool:
+    """words (starting at the program) run verify: vf, verify.py, verify.sh, or an interpreter running one of them."""
+    if not words:
+        return False
+    prog = _base(words[0])
+    if prog in _VERIFY_NAMES:
+        return True
+    if prog in _SHELLS or prog == "py" or prog.startswith("python"):
+        for a in words[1:]:
+            if not a.startswith("-"):
+                return _base(a) in _VERIFY_NAMES
+    return False
+
+
+def guard_verify_pipe() -> Decision:
+    return _block("BLOCK: piping verify into another command hides its exit code (a FAIL looks like success). "
+                  "Run it bare, or redirect to a file and read that: vf > log")
+
+
+def finalize(d: Decision) -> Decision:
+    """AGENTKIT_HEADLESS=1: nobody can answer a question, so every ask becomes a block."""
+    if d.kind == "ask" and os.environ.get("AGENTKIT_HEADLESS") == "1":
+        return Decision("block", "BLOCK (AGENTKIT_HEADLESS=1: no user to ask): " + d.message)
+    return d
 
 
 # ---------------------------------------------------------------- command line
@@ -604,6 +776,9 @@ def ask_json(reason: str) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
 
 
+_RELEVANT = re.compile(r"git|verify|\bvf\b")  # a command without these words has nothing for the rules to judge
+
+
 def cmd_bash(args: list[str]) -> int:
     """Judge a shell command given as arguments (BLOCK = exit 1) or as hook JSON on stdin (BLOCK = exit 2)."""
     block_rc = 1 if args else 2
@@ -616,11 +791,11 @@ def cmd_bash(args: list[str]) -> int:
             _out(sys.stderr, NOT_HOOK_JSON + "\n")
             return block_rc
         cmd = parsed
-    if "git" not in cmd:  # nothing to judge: skip the git calls
+    if not _RELEVANT.search(cmd):  # nothing to judge: skip the git calls
         return 0
     judge = Judge(cfg, current_branch())
     judge.scan(cmd, 0)
-    d = judge.decision()
+    d = finalize(judge.decision())
     if d.kind == "block":
         _out(sys.stderr, d.message + "\n")
         return block_rc

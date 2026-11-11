@@ -491,8 +491,6 @@ class RuleTests(unittest.TestCase):
             ("", "", None),
             ("origin HEAD:main", "feat", "main"),
             ("origin feat/x:main", "feat", "main"),
-            ("origin +main", "feat", "main"),
-            ("--force origin main", "feat", "main"),
             ("origin --delete main", "feat", "main"),
             ("origin refs/heads/main", "feat", "main"),
             ("origin HEAD", "feat", None),
@@ -539,6 +537,122 @@ class RuleTests(unittest.TestCase):
         d = judge("git commit -m x && git merge x", "main", {"git": {"protected_commit": "block"}})
         self.assertTrue(d.message.startswith("BLOCK: commit on protected branch"))   # first of two blocks
         self.assertEqual(judge("git status").kind, "allow")
+
+
+class Rules1bTests(unittest.TestCase):
+    """The 1b git rules. Everything is judged on the unprotected branch "feat" unless a test says otherwise."""
+
+    def kinds(self, cmds, want, branch="feat", data=None):
+        for cmd in cmds:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(judge(cmd, branch, data).kind, want)
+
+    def test_no_verify_table(self):
+        self.kinds(["git commit --no-verify -m x", "git commit -nm x", "git commit -a -n -m x", "git push --no-verify",
+                    "git merge --no-verify x", "git commit -m x --no-verify"], "block")
+        self.kinds(["git push -n", "git push --dry-run", 'git commit -m "--no-verify in msg"', "git commit -m -n", "git commit -mn",
+                    "git log -n 5", "git commit -m x"], "allow")
+        d = judge("git commit --no-verify -m x")
+        self.assertTrue(d.message.startswith("BLOCK: 'git commit' skips the git hooks"), d.message)
+
+    def test_hooks_path_table(self):
+        self.kinds(["git -c core.hooksPath=/x status", "git -c CORE.HOOKSPATH=/x commit -m x", "git -c core.hookspath= status",
+                    "git config core.hooksPath x", "git config --global core.hooksPath x", "git config CORE.hookspath x"], "block")
+        self.kinds(["git config --get core.hooksPath", "git config --list", "git config --unset core.hooksPath",
+                    "git -c user.name=x status", "git config user.name x"], "allow")
+
+    def test_force_push_table(self):
+        self.kinds(["git push -f origin main", "git push --force origin main", "git push --force-with-lease origin main",
+                    "git push --force-with-lease=main origin main", "git push --force-if-includes origin main",
+                    "git push origin +main", "git push origin +feat:main", "git push -f --all origin"], "block")
+        self.assertEqual(judge("git push -f", "main").kind, "block")                   # bare force push from a protected branch
+        self.assertEqual(judge("git push -fu origin main", "feat").kind, "block")      # -f inside a bundle
+        d = judge("git push --force origin main")
+        self.assertEqual(d.message, "BLOCK: force push to protected branch 'main'. Push a task branch and merge with --no-ff.")
+        self.kinds(["git push -f origin feat", "git push origin +feat", "git push --force-with-lease origin feat"], "ask")
+        self.kinds(["git push origin feat", "git push -u origin feat"], "allow")
+        self.kinds(["git push -f origin feat"], "block", data={"guards": {"destructive": "block"}})
+        self.kinds(["git push -f origin feat"], "allow", data={"guards": {"destructive": "allow"}})
+        self.kinds(["git push -f origin main"], "block", data={"guards": {"destructive": "allow"}})   # protected: always
+
+    def test_destructive_table(self):
+        self.kinds(["git reset --hard", "git reset --hard HEAD~1", "git reset --merge", "git reset --keep",
+                    "git branch -D x", "git branch -d -f x", "git branch --delete --force x", "git branch -Dr x",
+                    "git clean -fd", "git clean -f", "git clean --force", "git stash drop", "git stash clear",
+                    "git checkout -- f.txt", "git checkout .", "git checkout HEAD -- f", "git checkout -- .",
+                    "git restore f", "git restore --worktree f", "git restore --staged --worktree f", "git restore -S -W f",
+                    "git push --delete origin x", "git push origin :x", "git push -d origin x",
+                    "git filter-branch x", "git filter-repo", "git update-ref -d refs/x", "git reflog expire --all",
+                    "git gc --prune=now"], "ask")
+        self.kinds(["git checkout -b x", "git checkout main", "git checkout --", "git restore --staged f", "git restore -S f",
+                    "git clean -n", "git clean -nf", "git clean --dry-run -f", "git branch -d x", "git branch -f x HEAD", "git branch",
+                    "git stash pop", "git stash", "git stash list", "git reset --soft HEAD~1", "git reset HEAD f", "git reset",
+                    "git gc", "git push origin feat", "git update-ref refs/x HEAD", "git reflog", "git switch -c x",
+                    "git status", "git log --oneline"], "allow")
+        d = judge("git reset --hard")
+        self.assertEqual((d.kind, d.message), ("ask", "Destructive command 'git reset': discards changes in the working tree. "
+                                                      "Approve only if the user asked for it."))
+
+    def test_destructive_policy_block_allow(self):
+        for value, want in (("block", "block"), ("allow", "allow"), ("ask", "ask"), ("weird", "ask")):
+            with self.subTest(value=value):
+                d = judge("git reset --hard", "feat", {"guards": {"destructive": value}})
+                self.assertEqual(d.kind, want)
+        d = judge("git reset --hard", "feat", {"guards": {"destructive": "block"}})
+        self.assertIn("destructive", d.message)
+        self.assertIn("guards.destructive=block", d.message)
+
+    def test_old_rules_keep_their_messages(self):
+        d = judge("git push origin --delete main")                                     # protected + delete: the push rule speaks first
+        self.assertEqual((d.kind, d.message), ("ask", "Push to protected branch 'main'. Approve only if the user asked for it; "
+                                                      "prefer pushing a task branch."))
+
+    def test_verify_pipe_table(self):
+        self.kinds(["vf | tail", "vf |& tee l", "python skills/verifying-changes/scripts/verify.py | tail -5", "bash scripts/verify.sh | head",
+                    "py -3 verify.py | cat", "time vf | tail", ".agentkit/scripts/verify.sh --hook | cat", "vf --step 2 2>&1 | tail",
+                    "python3 'C:\\x\\verify.py' | cat", 'bash -c "vf | tail"', "VF=1 vf | tail"], "block")
+        self.kinds(["vf > log", "vf 2>&1 > log", "vf || echo F", "vf; echo x | tail", "vf && echo ok", "echo x | vf",
+                    "python -m pytest | tail", "vf >log; tail log", "vf", "git log | tail"], "allow")
+        d = judge("vf | tail")
+        self.assertIn("hides its exit code", d.message)
+        self.assertTrue(d.message.startswith("BLOCK: piping verify"), d.message)
+
+    def test_headless_ask_becomes_block(self):
+        ask = judge("git reset --hard")
+        self.assertEqual(ask.kind, "ask")
+        old = os.environ.get("AGENTKIT_HEADLESS")
+        try:
+            os.environ["AGENTKIT_HEADLESS"] = "1"
+            d = guard.finalize(ask)
+            self.assertEqual(d.kind, "block")
+            self.assertTrue(d.message.startswith("BLOCK (AGENTKIT_HEADLESS=1: no user to ask): Destructive command"), d.message)
+            self.assertEqual(guard.finalize(guard.ALLOW).kind, "allow")
+            self.assertEqual(guard.finalize(judge("git merge x", "main")).kind, "block")          # a block stays a block
+            os.environ["AGENTKIT_HEADLESS"] = "0"                                                  # only the exact value 1 counts
+            self.assertEqual(guard.finalize(ask).kind, "ask")
+            del os.environ["AGENTKIT_HEADLESS"]
+            self.assertEqual(guard.finalize(ask).kind, "ask")
+        finally:
+            if old is None:
+                os.environ.pop("AGENTKIT_HEADLESS", None)
+            else:
+                os.environ["AGENTKIT_HEADLESS"] = old
+
+    def test_headless_through_the_command_line(self):
+        def run(headless):
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+            env.pop("AGENTKIT_HEADLESS", None)
+            if headless:
+                env["AGENTKIT_HEADLESS"] = "1"
+            with tempfile.TemporaryDirectory() as d:
+                p = subprocess.run([sys.executable, GUARD, "bash", "git reset --hard"], cwd=d, env=env, capture_output=True)
+            return p.returncode, p.stdout, p.stderr
+        rc, out, err = run(False)
+        self.assertEqual(rc, 0)
+        self.assertIn(b'"permissionDecision":"ask"', out)
+        rc, out, err = run(True)
+        self.assertEqual((rc, out), (1, b""))
+        self.assertTrue(err.startswith(b"BLOCK (AGENTKIT_HEADLESS=1: no user to ask): "), err)
 
 
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard.py")
