@@ -865,6 +865,13 @@ class PathTests(unittest.TestCase):
             self.assertEqual(guard.resolve_path("/c/x/y", self.repo), "/c/x/y")       # elsewhere /c/... is an ordinary path
             self.assertFalse(guard.same_or_under("/Users/X/y", "/users/x"))           # and case matters
 
+    def test_pattern_without_drive_takes_the_repo_drive(self):
+        if os.name == "nt":
+            self.assertEqual(guard.resolve_pattern("/tmp/**", "D:/repo").lower(), "d:/tmp/**")
+        else:
+            self.assertEqual(guard.resolve_pattern("**/.env", "/repo"), "**/.env")        # a wildcard-first pattern is kept as is
+        self.assertEqual(guard.resolve_pattern("**/*.pem", "/repo" if os.name != "nt" else "C:/repo"), "**/*.pem")
+
     def test_same_or_under(self):
         table = [
             ("/a/b", "/a", True), ("/a", "/a", True), ("/a/", "/a", True), ("/a/b", "/a/", True),
@@ -1192,9 +1199,18 @@ class WrapperTests(unittest.TestCase):
                 os.symlink(shutil.which(tool), link)
         return d
 
+    def system_dirs(self):
+        """The directories of bash and dirname (on macOS they differ: /bin/bash, /usr/bin/dirname)."""
+        dirs = []
+        for tool in ("bash", "dirname"):
+            d = os.path.dirname(shutil.which(tool) or "")
+            if d and d not in dirs:
+                dirs.append(d)
+        return dirs
+
     def run_wrapper(self, dirs, *args, stdin=b"", minimal=False):
-        tail = self.minimal_bin() if minimal else os.path.dirname(shutil.which("bash"))
-        env = dict(os.environ, PATH=os.pathsep.join(dirs + [tail]))
+        tail = [self.minimal_bin()] if minimal else self.system_dirs()
+        env = dict(os.environ, PATH=os.pathsep.join(dirs + tail))
         p = subprocess.run([shutil.which("bash"), self.WRAPPER, *args], input=stdin, capture_output=True, env=env)
         return p.returncode, p.stdout.decode(), p.stderr.decode()
 
@@ -1229,7 +1245,7 @@ class WrapperTests(unittest.TestCase):
     FS_WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard-fs.sh")
 
     def run_script(self, script, dirs, *args, stdin=b"", extra_env=None, cwd=None):
-        env = dict(os.environ, PATH=os.pathsep.join(dirs + [os.path.dirname(shutil.which("bash"))]), **(extra_env or {}))
+        env = dict(os.environ, PATH=os.pathsep.join(dirs + self.system_dirs()), **(extra_env or {}))
         p = subprocess.run([shutil.which("bash"), script, *args], input=stdin, capture_output=True, env=env, cwd=cwd)
         return p.returncode, p.stdout.decode(), p.stderr.decode()
 

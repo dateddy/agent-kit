@@ -1045,6 +1045,8 @@ def resolve_pattern(pat: str, base: str) -> str:
     pat = _expand(pat.replace("{tmp}", tempfile.gettempdir())).replace("\\", "/")
     if pat.startswith("*"):
         return pat
+    if IS_NT and pat.startswith("/") and not pat.startswith("//") and base[1:2] == ":":
+        pat = base[:2] + pat  # a pattern with no drive letter (/tmp/**) means the drive of the repo
     if not _ABS_PATTERN.match(pat):
         pat = base.rstrip("/") + "/" + pat
     cuts = [pat.find(c) for c in _GLOB_CHARS if c in pat]
