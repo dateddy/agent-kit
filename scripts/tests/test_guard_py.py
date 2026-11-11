@@ -749,11 +749,244 @@ class CliTests(unittest.TestCase):
             self.assertTrue(err.startswith(b"BLOCK: commit on protected branch 'main' (git.protected_commit=block)."))
 
     def test_subcommands(self):
-        for args in ([], ["git", "commit"], ["edit"], ["--help"]):
+        for args in ([], ["git", "commit"], ["frobnicate"], ["--help"]):
             with self.subTest(args=args):
                 rc, out, err = self.run_guard(args)
                 self.assertEqual((rc, out), (1, b""))
                 self.assertTrue(err.startswith(b"usage: guard.py bash [COMMAND...]"))
+
+
+def norm(p):
+    return p.replace("\\", "/")
+
+
+class PathTests(unittest.TestCase):
+    """resolve_path, RepoInfo and `guard.py edit` on throwaway repos (symlink cases skip where symlinks are not allowed)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.tmp = os.path.realpath(cls.tmpdir.name)
+        cls.home = os.path.join(cls.tmp, "home")
+        cls.repo = os.path.join(cls.tmp, "repo")
+        cls.outside = os.path.join(cls.tmp, "outside")
+        cls.other = os.path.join(cls.tmp, "other")
+        cls.wt = os.path.join(cls.tmp, "wt")
+        for d in (cls.home, cls.repo, cls.outside, cls.other):
+            os.makedirs(d)
+        cls.env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull, "HOME": cls.home, "USERPROFILE": cls.home}
+        cls.env.pop("AGENTKIT_HEADLESS", None)
+        cls.git(cls.repo, "init", "-q")
+        cls.git(cls.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+        cls.git(cls.repo, "worktree", "add", "-q", cls.wt, "-b", "wt")
+        cls.git(cls.other, "init", "-q")
+        os.makedirs(os.path.join(cls.repo, "sub"))
+        cls.can_link = True
+        try:
+            os.symlink(cls.outside, os.path.join(cls.repo, "link"), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            # Windows without developer mode: a directory junction needs no privilege and realpath follows it too
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", os.path.join(cls.repo, "link"), cls.outside], capture_output=True) if os.name == "nt" else None
+            cls.can_link = bool(r and r.returncode == 0)
+        cls.write_cfg({"fs": {"allow_write": []}})                      # nothing outside the repo is allowed unless a test says so
+        with open(os.path.join(cls.outside, ".agentkit.json"), "w", encoding="utf-8") as f:
+            json.dump({"fs": {"allow_write": []}}, f)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    @classmethod
+    def git(cls, cwd, *args):
+        subprocess.run(["git", *args], cwd=cwd, env=cls.env, check=True, capture_output=True)
+
+    @classmethod
+    def write_cfg(cls, data):
+        with open(os.path.join(cls.repo, ".agentkit.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    def run_edit(self, args, payload=None, cwd=None, env=None):
+        stdin = json.dumps(payload).encode() if payload is not None else b""
+        p = subprocess.run([sys.executable, GUARD, "edit", *args], input=stdin, capture_output=True, cwd=cwd or self.repo, env=env or self.env)
+        return p.returncode, p.stdout, p.stderr
+
+    def hook(self, tool_input, cwd=None, env=None):
+        return self.run_edit([], {"tool_name": "Edit", "tool_input": tool_input, "cwd": cwd or self.repo}, cwd=cwd, env=env)
+
+    def test_resolve_table(self):
+        old = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE")}
+        os.environ["HOME"] = os.environ["USERPROFILE"] = self.home
+        try:
+            r, o = self.repo, self.outside
+            table = [
+                ("a/b.txt", r, norm(os.path.join(r, "a", "b.txt"))),                 # a new file in a directory that does not exist
+                ("../outside/x", r, norm(os.path.join(o, "x"))),                      # .. leaves the repo
+                ("sub/../x", r, norm(os.path.join(r, "x"))),
+                ("x", o, norm(os.path.join(o, "x"))),                                 # the same relative path under two cwds
+                ("x", r, norm(os.path.join(r, "x"))),
+                (os.path.join(o, "y"), r, norm(os.path.join(o, "y"))),                # absolute stays absolute
+                ("~", r, norm(self.home)),
+                ("~/x", r, norm(self.home) + "/x"),
+                ("$HOME/x", r, norm(self.home) + "/x"),
+                ("${HOME}/x/../y", r, norm(self.home) + "/y"),
+                (".", r, norm(r)),
+            ]
+            for p, cwd, want in table:
+                with self.subTest(p=p, cwd=cwd):
+                    self.assertEqual(guard.resolve_path(p, cwd), want)
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_resolve_symlink_out_of_repo(self):
+        if not self.can_link:
+            self.skipTest("symlinks are not available")
+        want = norm(os.path.join(self.outside, "new", "f.txt"))
+        self.assertEqual(guard.resolve_path("link/new/f.txt", self.repo), want)       # nothing of it exists, the link is followed
+        self.assertFalse(guard.RepoInfo(self.repo).in_repo(guard.resolve_path("link/new/f.txt", self.repo)))
+
+    def test_resolve_windows_forms(self):
+        if os.name == "nt":
+            table = [
+                ("C:\\x\\y", "C:/x/y"),
+                ("c:/x/../y", "c:/y"),
+                ("/c/x/y", "C:/x/y"),                                                 # MSYS form
+                ("/C/x", "C:/x"),
+                ("/c", "C:/"),
+            ]
+            for p, want in table:
+                with self.subTest(p=p):
+                    self.assertEqual(guard.resolve_path(p, self.repo).lower(), want.lower())
+            self.assertTrue(guard.same_or_under("c:/Users/X/y", "C:/users/x"))        # drive letter and case do not matter
+        else:
+            self.assertEqual(guard.resolve_path("/c/x/y", self.repo), "/c/x/y")       # elsewhere /c/... is an ordinary path
+            self.assertFalse(guard.same_or_under("/Users/X/y", "/users/x"))           # and case matters
+
+    def test_same_or_under(self):
+        table = [
+            ("/a/b", "/a", True), ("/a", "/a", True), ("/a/", "/a", True), ("/a/b", "/a/", True),
+            ("/ab", "/a", False), ("/a", "/a/b", False), ("/b/a", "/a", False),
+        ]
+        for p, root, want in table:
+            with self.subTest(p=p, root=root):
+                self.assertEqual(guard.same_or_under(p, root), want)
+
+    def test_in_repo_worktree(self):
+        info = guard.RepoInfo(self.repo)
+        self.assertEqual(info.top, norm(self.repo))
+        table = [
+            (os.path.join(self.repo, "sub", "f"), True),
+            (os.path.join(self.repo, "new", "deep", "f"), True),
+            (os.path.join(self.wt, "f"), True),                                       # a worktree of the same repo
+            (os.path.join(self.wt, "not", "yet", "f"), True),
+            (os.path.join(self.outside, "f"), False),
+            (os.path.join(self.other, "f"), False),                                   # another repository
+            (os.path.join(self.tmp, "f"), False),
+        ]
+        for p, want in table:
+            with self.subTest(p=p):
+                self.assertEqual(info.in_repo(guard.resolve_path(p, self.repo)), want)
+        wt_info = guard.RepoInfo(self.wt)                                             # and from inside the worktree
+        self.assertTrue(wt_info.in_repo(guard.resolve_path(os.path.join(self.repo, "f"), self.wt)))
+
+    def test_repo_info_outside_any_repo(self):
+        info = guard.RepoInfo(self.outside)                                           # no repo: the cwd is the project root
+        self.assertEqual(info.top, norm(self.outside))
+        self.assertTrue(info.in_repo(guard.resolve_path("x", self.outside)))
+        self.assertFalse(info.in_repo(guard.resolve_path("../x", self.outside)))
+
+    def test_cfg_list(self):
+        c = guard.Config({"fs": {"allow_write": [], "deny_read": ["a", "b"], "x": "str"}})
+        self.assertEqual(c.cfg_list("fs.allow_write", ["d"]), [])                     # an explicit empty list is kept
+        self.assertEqual(c.cfg_list("fs.deny_read", ["d"]), ["a", "b"])
+        self.assertEqual(c.cfg_list("fs.missing", ["d"]), ["d"])
+        self.assertEqual(c.cfg_list("fs.x", ["d"]), ["d"])                            # not a list: the default
+        self.assertEqual(guard.Config().cfg_list("fs.allow_write", ["d"]), ["d"])
+
+    def test_write_decision_defaults_and_allow_write(self):
+        info = guard.RepoInfo(self.repo)
+        cfg = guard.Config()
+        scratch = guard.resolve_path(os.path.join(tempfile.gettempdir(), "agentkit-zz", "f"), self.repo)
+        self.assertEqual(guard.write_decision(scratch, info, cfg).kind, "allow")      # the OS scratch dir is allowed by default
+        home_cache = guard.resolve_path("~/.cache/x", self.repo)
+        self.assertEqual(guard.write_decision(home_cache, info, cfg).kind, "allow")
+        d = guard.write_decision(guard.resolve_path("~/.bashrc", self.repo), info, cfg)
+        self.assertEqual(d.kind, "ask")
+        self.assertIn("(fs.outside_repo_write=ask)", d.message)
+        self.assertEqual(guard.write_decision(guard.resolve_path("sub/f", self.repo), info, cfg).kind, "allow")
+        blocked = guard.Config({"fs": {"outside_repo_write": "block", "allow_write": []}})
+        d = guard.write_decision(guard.resolve_path("~/.bashrc", self.repo), info, blocked)
+        self.assertEqual(d.kind, "block")
+        self.assertTrue(d.message.startswith("BLOCK: write outside the repo: "), d.message)
+        mine = guard.Config({"fs": {"allow_write": [norm(self.outside) + "/**"]}})
+        self.assertEqual(guard.write_decision(guard.resolve_path(os.path.join(self.outside, "d", "f"), self.repo), info, mine).kind, "allow")
+        self.assertEqual(guard.write_decision(guard.resolve_path(os.path.join(self.other, "f"), self.repo), info, mine).kind, "ask")
+
+    def test_edit_hook_json(self):
+        rc, out, err = self.hook({"file_path": os.path.join(self.repo, "sub", "f.py")})
+        self.assertEqual((rc, out, err), (0, b"", b""))                               # inside the repo
+        rc, out, err = self.hook({"file_path": os.path.join(self.wt, "f.py")})
+        self.assertEqual((rc, out, err), (0, b"", b""))                               # a worktree of the repo
+        rc, out, err = self.hook({"file_path": os.path.join(self.outside, "f.py")})
+        self.assertEqual((rc, err), (0, b""))
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+        rc, out, err = self.hook({"notebook_path": os.path.join(self.outside, "n.ipynb")})       # NotebookEdit
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+        rc, out, err = self.hook({})                                                  # no path: nothing to judge
+        self.assertEqual((rc, out, err), (0, b"", b""))
+
+    def test_edit_message_has_absolute_path(self):
+        rc, out, err = self.hook({"file_path": "../outside/new/x.txt"})               # relative to the cwd of the hook JSON
+        reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn(norm(os.path.join(self.outside, "new", "x.txt")), reason)
+        self.assertNotIn("..", reason)
+
+    def test_edit_cwd_changes_the_answer(self):
+        rc, out, err = self.hook({"file_path": "x.txt"}, cwd=self.repo)
+        self.assertEqual((rc, out), (0, b""))
+        rc, out, err = self.hook({"file_path": "x.txt"}, cwd=self.outside)            # same relative path, other cwd: inside its own root
+        self.assertEqual((rc, out), (0, b""))
+        rc, out, err = self.hook({"file_path": "../repo/x.txt"}, cwd=self.outside)    # outside's root is not the repo
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_edit_allow_write_and_block_policy(self):
+        self.write_cfg({"fs": {"allow_write": [norm(self.outside) + "/**"]}})
+        try:
+            rc, out, err = self.hook({"file_path": os.path.join(self.outside, "ok.txt")})
+            self.assertEqual((rc, out, err), (0, b"", b""))
+            rc, out, err = self.hook({"file_path": os.path.join(self.other, "no.txt")})
+            self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+            self.write_cfg({"fs": {"outside_repo_write": "block", "allow_write": []}})
+            rc, out, err = self.hook({"file_path": os.path.join(self.outside, "no.txt")})
+            self.assertEqual((rc, out), (2, b""))                                     # hook mode: 2 blocks
+            self.assertTrue(err.startswith(b"BLOCK: write outside the repo: "), err)
+            rc, out, err = self.run_edit([os.path.join(self.outside, "no.txt")])      # argument mode: 1 blocks
+            self.assertEqual((rc, out), (1, b""))
+        finally:
+            self.write_cfg({"fs": {"allow_write": []}})
+
+    def test_edit_arg_mode(self):
+        rc, out, err = self.run_edit([os.path.join(self.repo, "sub", "f")])
+        self.assertEqual((rc, out, err), (0, b"", b""))
+        rc, out, err = self.run_edit(["../outside/f"])                                # relative to the process cwd
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_edit_invalid_input(self):
+        p = subprocess.run([sys.executable, GUARD, "edit"], input=b"not json", capture_output=True, cwd=self.repo, env=self.env)
+        self.assertEqual((p.returncode, p.stdout), (2, b""))
+        self.assertTrue(p.stderr.startswith(b"guard-fs: stdin is not Claude Code hook JSON"), p.stderr)
+
+    def test_edit_headless(self):
+        env = {**self.env, "AGENTKIT_HEADLESS": "1"}
+        rc, out, err = self.hook({"file_path": os.path.join(self.outside, "f.py")}, env=env)
+        self.assertEqual((rc, out), (2, b""))
+        self.assertTrue(err.startswith(b"BLOCK (AGENTKIT_HEADLESS=1: no user to ask): Write outside the repo: "), err)
+        rc, out, err = self.hook({"file_path": os.path.join(self.repo, "f.py")}, env=env)
+        self.assertEqual((rc, out, err), (0, b"", b""))                               # inside the repo stays allowed
 
 
 class WrapperTests(unittest.TestCase):

@@ -2,6 +2,7 @@
 """guard.py - the logic behind the agent-kit guards. Stdlib only, Python 3.9+.
 
   guard.py bash [COMMAND...]     judge a shell command (git rules); no arguments = Claude Code PreToolUse JSON on stdin
+  guard.py edit [PATH]           judge a file edit (writes outside the repo); no argument = PreToolUse JSON on stdin
 
 Exit-code convention: see scripts/guard-git.sh (hook mode: 0 allow/ask, 2 BLOCK; argument mode: 0 allow/ask, 1 BLOCK).
 stdout carries nothing but the "ask" JSON; every other message goes to stderr.
@@ -13,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any, Optional, Tuple
 
 SEP = "\x1f"  # command separator inside a token list; same character as the bash version
@@ -253,6 +255,15 @@ class Config:
         text = text.replace("\r", "").rstrip("\n")
         return text or default
 
+    def cfg_list(self, path: str, default: list[str]) -> list[str]:
+        """The JSON array at path as a list of strings (an explicit empty list stays empty); the default when it is not an array."""
+        v: Any = self.data
+        for key in path.split("."):
+            if not isinstance(v, dict):
+                return list(default)
+            v = v.get(key)
+        return [_jq_tostring(x) for x in v] if isinstance(v, list) else list(default)
+
     def protected_patterns(self) -> list[str]:
         lst = self.cfg("git.protected_branches", "") or DEFAULT_PROTECTED
         return [p for p in lst.split("\n") if p]
@@ -261,10 +272,11 @@ class Config:
         return any(glob_match(p, branch) for p in self.protected_patterns())
 
 
-def load_config(cwd: Optional[str] = None) -> Config:
-    """Config of the repo around cwd (else cwd itself), like AK_ROOT in lib.sh. The WARN goes to stderr here."""
-    rc, top = git(["rev-parse", "--show-toplevel"], cwd=cwd)
-    root = top if rc == 0 and top else (cwd or os.getcwd())
+def load_config(cwd: Optional[str] = None, root: Optional[str] = None) -> Config:
+    """Config of the repo around cwd (else cwd itself), like AK_ROOT in lib.sh; root skips the lookup. The WARN goes to stderr here."""
+    if root is None:
+        rc, top = git(["rev-parse", "--show-toplevel"], cwd=cwd)
+        root = top if rc == 0 and top else (cwd or os.getcwd())
     c = Config.from_file(root.rstrip("/\\") + "/.agentkit.json")  # "/" like the bash version; Windows accepts it
     if c.warning:
         _out(sys.stderr, c.warning + "\n")
@@ -741,9 +753,163 @@ def finalize(d: Decision) -> Decision:
     return d
 
 
+# ---------------------------------------------------------------- paths and the fs rules (1b)
+IS_NT = os.name == "nt"
+_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(?=/|$)")
+_HOME_VAR = re.compile(r"^\$(\{HOME\}|HOME)(?=[/\\]|$)")
+_ABS_PATTERN = re.compile(r"^(/|[A-Za-z]:)")
+_GLOB_CHARS = "*?["
+FS_ALLOW_WRITE = ["/tmp/**", "~/.cache/**", "{tmp}/**"]  # {tmp} = the OS scratch directory
+FS_DENY_READ = ["~/.ssh/**", "~/.aws/**", "~/.config/gh/**", "~/.gnupg/**", "**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"]
+FS_ALLOW_READ = ["**/.env.example", "**/.env.sample", "**/.env.template"]  # exceptions to FS_DENY_READ
+
+
+def home_dir() -> str:
+    return os.environ.get("HOME") or os.path.expanduser("~")
+
+
+def _expand(p: str) -> str:
+    """~ and $HOME at the start of p; on Windows also the MSYS form /c/x -> C:/x. No cwd, no symlinks."""
+    if p == "~" or p.startswith("~/") or p.startswith("~\\"):
+        p = home_dir() + p[1:]
+    else:
+        m = _HOME_VAR.match(p)
+        if m:
+            p = home_dir() + p[m.end():]
+    if IS_NT:
+        m = _MSYS_DRIVE.match(p)
+        if m:
+            p = m.group(1).upper() + ":" + p[2:]
+            if len(p) == 2:
+                p += "/"
+    return p
+
+
+def _real(path: str) -> str:
+    """realpath that also works when the end of the path does not exist: the nearest existing ancestor is resolved."""
+    if len(path) > 3:
+        path = path.rstrip("/\\")
+    head, tail = path, []
+    while not os.path.lexists(head):
+        parent, name = os.path.split(head)
+        if parent == head or not name:
+            break
+        tail.append(name)
+        head = parent
+    real = os.path.realpath(head)
+    return os.path.normpath(os.path.join(real, *reversed(tail))) if tail else real
+
+
+def resolve_path(p: str, cwd: str) -> str:
+    """Absolute, symlink-free, "/"-separated form of p: ~ $HOME and /c/x are expanded, a relative p is taken from cwd,
+    `..` is followed, and a path that does not exist yet is resolved through its nearest existing directory."""
+    return _real(os.path.join(cwd, _expand(p))).replace("\\", "/")
+
+
+def _cmp(p: str) -> str:
+    p = p.replace("\\", "/").rstrip("/")
+    return p.lower() if IS_NT else p
+
+
+def same_or_under(path: str, root: str) -> bool:
+    a, r = _cmp(path), _cmp(root)
+    return a == r or a.startswith(r + "/")
+
+
+class RepoInfo:
+    """The repository around cwd: `top` (work tree root, "/"-separated) and `common` (its shared .git directory).
+
+    Outside any repository the cwd is the project root and `common` is "".
+    """
+
+    def __init__(self, cwd: str) -> None:
+        self.cwd = cwd
+        rc, out = git(["rev-parse", "--show-toplevel", "--git-common-dir"], cwd=cwd)
+        parts = out.split("\n") if rc == 0 else []
+        if len(parts) >= 2 and parts[0]:
+            self.top = resolve_path(parts[0], cwd)
+            self.common = resolve_path(parts[1], cwd)
+        else:
+            self.top = resolve_path(".", cwd)
+            self.common = ""
+
+    def in_repo(self, path: str) -> bool:
+        """path (from resolve_path) is under the work tree, or in a worktree that shares this repository's .git."""
+        if same_or_under(path, self.top):
+            return True
+        if not self.common:
+            return False
+        d = path
+        while not os.path.isdir(d):
+            parent = os.path.dirname(d)
+            if parent == d:
+                return False
+            d = parent
+        rc, out = git(["rev-parse", "--git-common-dir"], cwd=d)
+        return rc == 0 and bool(out) and _cmp(resolve_path(out, d)) == _cmp(self.common)
+
+
+def resolve_pattern(pat: str, base: str) -> str:
+    """A fs.* glob with {tmp}, ~ and $HOME expanded; a relative one is taken from base; the part before the
+    first wildcard goes through realpath, so /tmp/** still matches where /tmp is a symlink (macOS)."""
+    pat = _expand(pat.replace("{tmp}", tempfile.gettempdir())).replace("\\", "/")
+    if pat.startswith("*"):
+        return pat
+    if not _ABS_PATTERN.match(pat):
+        pat = base.rstrip("/") + "/" + pat
+    cuts = [pat.find(c) for c in _GLOB_CHARS if c in pat]
+    if not cuts:
+        return _real(pat).replace("\\", "/")
+    prefix = pat[:pat.rfind("/", 0, min(cuts)) + 1]
+    return _real(prefix).replace("\\", "/").rstrip("/") + "/" + pat[len(prefix):]
+
+
+class FsRules:
+    """The fs.* settings of a config, resolved against the repository `repo`."""
+
+    def __init__(self, cfg: Config, repo: RepoInfo) -> None:
+        self.cfg = cfg
+        self.repo = repo
+        self._cache: dict[str, list[str]] = {}
+
+    def patterns(self, key: str, default: list[str]) -> list[str]:
+        if key not in self._cache:
+            self._cache[key] = [resolve_pattern(p, self.repo.top) for p in self.cfg.cfg_list("fs." + key, default)]
+        return self._cache[key]
+
+    def matches(self, key: str, default: list[str], path: str) -> bool:
+        p = path.lower() if IS_NT else path
+        return any(glob_match(pat.lower() if IS_NT else pat, p) for pat in self.patterns(key, default))
+
+    def allows_write(self, path: str) -> bool:
+        return self.matches("allow_write", FS_ALLOW_WRITE, path)
+
+    def denies_read(self, path: str) -> bool:
+        return self.matches("deny_read", FS_DENY_READ, path) and not self.matches("allow_read", FS_ALLOW_READ, path)
+
+    def outside_policy(self) -> str:
+        """fs.outside_repo_write: "block" | anything else means "ask"."""
+        return "block" if self.cfg.cfg("fs.outside_repo_write", "ask") == "block" else "ask"
+
+
+def write_decision(path: str, repo: RepoInfo, cfg: Config, rules: Optional[FsRules] = None) -> Decision:
+    """A write or delete of path (absolute, from resolve_path): free in the repo and in fs.allow_write, else fs.outside_repo_write."""
+    if repo.in_repo(path):
+        return ALLOW
+    rules = rules or FsRules(cfg, repo)
+    if rules.allows_write(path):
+        return ALLOW
+    if rules.outside_policy() == "block":
+        return _block(f"BLOCK: write outside the repo: {path} (fs.outside_repo_write=block). "
+                      "Work inside the repo, or ask the user to add the path to fs.allow_write.")
+    return Decision("ask", f"Write outside the repo: {path} (fs.outside_repo_write=ask). Approve only if the user asked for it.")
+
+
 # ---------------------------------------------------------------- command line
-USAGE = "usage: guard.py bash [COMMAND...]\n  no COMMAND: read the Claude Code PreToolUse JSON from stdin\n"
+USAGE = ("usage: guard.py bash [COMMAND...]\n  no COMMAND: read the Claude Code PreToolUse JSON from stdin\n"
+         "       guard.py edit [PATH]\n  no PATH: read the Claude Code PreToolUse JSON (file_path or notebook_path, cwd) from stdin\n")
 NOT_HOOK_JSON = "guard-git: stdin is not Claude Code hook JSON. Pass the command as arguments instead."
+NOT_HOOK_JSON_EDIT = "guard-fs: stdin is not Claude Code hook JSON. Pass the path as an argument instead."
 
 
 def _out(stream: Any, text: str) -> None:
@@ -804,9 +970,47 @@ def cmd_bash(args: list[str]) -> int:
     return 0
 
 
+def hook_payload(raw: bytes) -> Optional[dict]:
+    """The PreToolUse JSON object; {} when it is valid JSON but not an object, None when it is not JSON (or null/false)."""
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except ValueError:
+        return None
+    if data is None or data is False:
+        return None
+    return data if isinstance(data, dict) else {}
+
+
+def cmd_edit(args: list[str]) -> int:
+    """Judge the file an Edit/Write/MultiEdit/NotebookEdit is about to change: given as an argument or as hook JSON on stdin."""
+    block_rc = 1 if args else 2
+    if args:
+        path, cwd = args[0], os.getcwd()
+    else:
+        data = hook_payload(sys.stdin.buffer.read())
+        if data is None:
+            _out(sys.stderr, NOT_HOOK_JSON_EDIT + "\n")
+            return block_rc
+        tool_input = data.get("tool_input")
+        tool_input = tool_input if isinstance(tool_input, dict) else {}
+        path = _jq_tostring(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        cwd = _jq_tostring(data.get("cwd") or "") or os.getcwd()
+    if not path:
+        return 0
+    repo = RepoInfo(cwd)
+    cfg = load_config(root=repo.top)
+    d = finalize(write_decision(resolve_path(path, cwd), repo, cfg))
+    if d.kind == "block":
+        _out(sys.stderr, d.message + "\n")
+        return block_rc
+    if d.kind == "ask":
+        _out(sys.stdout, ask_json(d.message))
+    return 0
+
+
 SUBCOMMANDS = {
     "bash": cmd_bash,
-    # "edit": cmd_edit,  # added in step 1b (file-edit rules)
+    "edit": cmd_edit,
 }
 
 
