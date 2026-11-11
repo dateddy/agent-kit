@@ -74,6 +74,59 @@ class TokenizeTests(unittest.TestCase):
             with self.subTest(toks=toks):
                 self.assertEqual(guard.segments(toks), want)
 
+    def test_lex_ops_kinds(self):
+        table = [
+            ("a && b", [("word", "a"), ("op", "&&"), ("word", "b")]),
+            ("a || b", [("word", "a"), ("op", "||"), ("word", "b")]),
+            ("a | b", [("word", "a"), ("op", "|"), ("word", "b")]),
+            ("a |& b", [("word", "a"), ("op", "|&"), ("word", "b")]),
+            ("a & b", [("word", "a"), ("op", "&"), ("word", "b")]),
+            ("a;b", [("word", "a"), ("op", ";"), ("word", "b")]),
+            ("a\nb", [("word", "a"), ("op", "\n"), ("word", "b")]),
+            ("(a)", [("op", "("), ("word", "a"), ("op", ")")]),
+            ("`a`", [("op", "`"), ("word", "a"), ("op", "`")]),
+            ('echo "a | b"', [("word", "echo"), ("word", "a | b")]),
+        ]
+        for text, want in table:
+            with self.subTest(text=text):
+                self.assertEqual(guard.lex(text), want)
+
+    def test_lex_redirects_table(self):
+        table = [
+            ("echo x>/dev/null", [("word", "echo"), ("word", "x"), ("redir", ">"), ("word", "/dev/null")]),
+            ("a 2>&1 | b", [("word", "a"), ("dup", "2>&1"), ("op", "|"), ("word", "b")]),
+            ("a &>log", [("word", "a"), ("redir", "&>"), ("word", "log")]),
+            ("a &>>log", [("word", "a"), ("redir", "&>>"), ("word", "log")]),
+            ('a >>"my file"', [("word", "a"), ("redir", ">>"), ("word", "my file")]),
+            ("a 1>&2", [("word", "a"), ("dup", "1>&2")]),
+            ("a >&2", [("word", "a"), ("dup", ">&2")]),
+            ("a >&log", [("word", "a"), ("redir", ">&"), ("word", "log")]),
+            ("a 2>err", [("word", "a"), ("redir", "2>"), ("word", "err")]),
+            ("a 2>>err", [("word", "a"), ("redir", "2>>"), ("word", "err")]),
+            ("a >| f", [("word", "a"), ("redir", ">|"), ("word", "f")]),
+            ("a2>f", [("word", "a2"), ("redir", ">"), ("word", "f")]),         # "a2" is a word, not fd 2
+            ('a ">" f', [("word", "a"), ("word", ">"), ("word", "f")]),        # quoted > is a plain word
+            ("cat < f", [("word", "cat"), ("redir_in", "<"), ("word", "f")]),
+            ("cat <<EOF", [("word", "cat"), ("redir_in", "<<"), ("word", "EOF")]),
+        ]
+        for text, want in table:
+            with self.subTest(text=text):
+                self.assertEqual(guard.lex(text), want)
+
+    def test_seg_ops(self):
+        table = [
+            ("vf | tail", [(["vf"], [], "|"), (["tail"], [], "")]),
+            ("vf > log", [(["vf"], [(">", "log")], "")]),
+            ("a 2>&1 | b", [(["a"], [], "|"), (["b"], [], "")]),
+            ("a >x >>y; b", [(["a"], [(">", "x"), (">>", "y")], ";"), (["b"], [], "")]),
+            ("a &&  && b", [(["a"], [], "&&"), (["b"], [], "")]),
+            ("a >", [(["a"], [(">", "")], "")]),
+            ("cat < f", [(["cat", "f"], [], "")]),         # input redirect: its target stays a word (deny_read checks it)
+        ]
+        for text, want in table:
+            with self.subTest(text=text):
+                self.assertEqual(guard.seg_ops(text), want)
+
 
 class ConfigTests(unittest.TestCase):
     def test_cfg_defaults_and_types(self):

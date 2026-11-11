@@ -13,14 +13,19 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 SEP = "\x1f"  # command separator inside a token list; same character as the bash version
 
 
-def tokenize(s: str) -> list[str]:
-    """Quote-aware words of s, with SEP between commands (&& || ; | & newline ( ) and backtick)."""
-    toks: list[str] = []
+Tok = Tuple[str, str]  # (kind, text); kind: word | op | redir | redir_in | dup
+
+
+def lex(s: str) -> list[Tok]:
+    """Quote-aware tokens of s. Kinds: word; op (&& || ; | |& & newline ( ) backtick, text kept);
+    redir (> >> >| >& 2> 2>> &> &>>: its target is the next word token); redir_in (< << <<<);
+    dup (2>&1, >&2: fd duplication, no file target, not a separator)."""
+    toks: list[Tok] = []
     cur: list[str] = []
     q = ""
     have = False
@@ -29,7 +34,7 @@ def tokenize(s: str) -> list[str]:
     def flush() -> None:
         nonlocal cur, have
         if have:
-            toks.append("".join(cur))
+            toks.append(("word", "".join(cur)))
         cur, have = [], False
 
     while i < n:
@@ -53,18 +58,107 @@ def tokenize(s: str) -> list[str]:
             flush()
         elif c in "\n;()`":
             flush()
-            toks.append(SEP)
+            toks.append(("op", c))
+        elif c == ">" or (c == "&" and s[i + 1:i + 2] == ">"):
+            fd = "".join(cur) if have and "".join(cur).isdigit() and c == ">" else ""
+            if fd:
+                cur, have = [], False
+            else:
+                flush()
+            op = fd + c
+            if c == "&":  # &> and &>>
+                i += 1
+                op += ">"
+            if s[i + 1:i + 2] == ">":
+                i += 1
+                op += ">"
+            elif s[i + 1:i + 2] == "|" and not c == "&":
+                i += 1
+                op += "|"
+            elif s[i + 1:i + 2] == "&" and c == ">":
+                m = re.match(r"&(\d+|-)", s[i + 1:])
+                if m:  # >&2, 2>&1, >&-: duplicate or close an fd
+                    i += len(m.group(0))
+                    toks.append(("dup", op + m.group(0)))
+                    i += 1
+                    continue
+                i += 1
+                op += "&"
+            toks.append(("redir", op))
+        elif c == "<":
+            flush()
+            op = "<"
+            while s[i + 1:i + 2] == "<" and len(op) < 3:
+                i += 1
+                op += "<"
+            toks.append(("redir_in", op))
         elif c in "&|":
             flush()
-            toks.append(SEP)
-            if s[i + 1:i + 2] == c:
+            nxt = s[i + 1:i + 2]
+            if nxt == c:
                 i += 1
+                toks.append(("op", c + c))
+            elif c == "|" and nxt == "&":
+                i += 1
+                toks.append(("op", "|&"))
+            else:
+                toks.append(("op", c))
         else:
             cur.append(c)
             have = True
         i += 1
     flush()
     return toks
+
+
+def tokenize(s: str) -> list[str]:
+    """Quote-aware words of s, with SEP between commands (&& || ; | & newline ( ) and backtick).
+
+    A projection of lex(): operators become SEP (|& is two), redirect operators stay as words, fd duplications are dropped.
+    """
+    out: list[str] = []
+    for kind, text in lex(s):
+        if kind == "op":
+            out.extend([SEP, SEP] if text == "|&" else [SEP])
+        elif kind != "dup":
+            out.append(text)
+    return out
+
+
+def seg_ops(s: str) -> list[tuple[list[str], list[tuple[str, str]], str]]:
+    """Segments of s as (words, redirects [(op, target)], operator that ends the segment, "" for the last).
+
+    Output redirects leave `words` and become (op, target); an input redirect's target stays a word. Empty segments are dropped.
+    """
+    out: list[tuple[list[str], list[tuple[str, str]], str]] = []
+    words: list[str] = []
+    redirs: list[tuple[str, str]] = []
+    pending = ""  # output redirect operator waiting for its target
+
+    def close(op: str) -> None:
+        nonlocal words, redirs, pending
+        if pending:
+            redirs.append((pending, ""))
+            pending = ""
+        if words or redirs:
+            out.append((words, redirs, op))
+        words, redirs = [], []
+
+    for kind, text in lex(s):
+        if kind == "op":
+            close(text)
+        elif kind == "redir":
+            if pending:
+                redirs.append((pending, ""))
+            pending = text
+        elif kind == "word":
+            if pending:
+                redirs.append((pending, text))
+                pending = ""
+            else:
+                words.append(text)
+    close("")
+    return out
 
 
 def segments(toks: list[str]) -> list[list[str]]:
