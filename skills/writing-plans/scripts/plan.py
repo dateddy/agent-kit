@@ -418,7 +418,8 @@ def cmd_field(a, r) -> int:
             step = active_step(f.read())
         if not step:
             return fail(f"task note {note} has no plan checklist. Run pl apply, or pass --step N.")
-    want = [str(i) for i in range(1, int(step) + 1)] if a.cumulative else [step]
+    # steps 1..N; for N < 1 there is no such range, so it is "step 0 not found" (0.4.0 asked the platform's seq: GNU printed nothing, BSD counted down)
+    want = [str(i) for i in range(1, int(step) + 1)] if a.cumulative and int(step) >= 1 else [step]
     text = Path(plan).read_bytes().decode("utf-8", "surrogateescape")
     values, problems = field_values(text, want, fld)
     if problems:

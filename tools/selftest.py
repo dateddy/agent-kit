@@ -1197,7 +1197,8 @@ def migrate_040_removes_unmodified(t: T):
         check((d / ".agentkit/skills" / gone).exists() == shim, f"{gone}: dir presence should be {shim}")
         check(not (d / ".claude/skills" / gone).exists() and not (d / ".claude/skills" / gone).is_symlink(),
               f"{gone} still in .claude/skills")
-        check(f"remove {d / '.agentkit/skills' / gone}" in out, f"no remove line for {gone}: {out[-400:]}")
+        check(any(l.startswith("remove ") and f"skills{os.sep}{gone}" in l.replace("/", os.sep) for l in out.splitlines()),
+              f"no remove line for {gone}: {out[-400:]}")
     check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
     check(not (d / ".claude/commands/grill.md").exists(), "the unmodified /grill command should be removed")
     for p, data in before.items():
@@ -1396,7 +1397,7 @@ def plan_field_parity(t: T):
     t.write(d, {"crlf.plan.md": PARITY_PLAN.replace("\n", "\r\n")})
     fields = ("title", "mode", "files", "contract", "tests", "out-of-scope", "verify", "do", "done", "colour")
     arg_sets = ([], ["--cumulative"], ["--step", "2"], ["--step", "2", "--cumulative"], ["--step", "4", "--cumulative"],
-                ["--step", "9"], ["--step", "0", "--cumulative"], ["--step", "x"], ["--step", "5"],
+                ["--step", "9"], ["--step", "x"], ["--step", "5"],
                 ["--plan", "crlf.plan.md", "--step", "2"], ["--plan", "missing.md", "--step", "1"],
                 ["--note", "missing-note.md"], ["--step"], ["--bogus"])
     n = 0
@@ -1412,6 +1413,10 @@ def plan_field_parity(t: T):
     want, got = capture(["bash", old, "files"], d), capture(["bash", new, "files"], d)
     check(want == got and want[0] == 1, f"detached HEAD\n  0.4.0: {want!r}\n  now:   {got!r}")
     check(n == len(fields) * len(arg_sets), "case count")
+    # `--step 0 --cumulative` depended on the platform's seq in 0.4.0 (GNU: empty output, BSD: error); now always the error
+    code, out, err = capture(["bash", new, "title", "--step", "0", "--cumulative", "--plan", "notes/tasks/main.plan.md",
+                          "--note", "notes/tasks/main.md"], d)
+    check(code == 1 and out == "" and "step 0 not found in the plan" in err, f"step 0 cumulative: {code} {out!r} {err!r}")
 
 
 # ================================================================ D bench harness (fake claude only)
