@@ -1287,5 +1287,53 @@ class WrapperTests(unittest.TestCase):
             self.assertIn("\n".join(body), f.read())
 
 
+class FpSweepTests(unittest.TestCase):
+    """tools/fp_sweep.py: which commands it takes from the docs, and its exit code."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location("fp_sweep_t", os.path.join(here, "..", "..", "tools", "fp_sweep.py"))
+        cls.fp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.fp)
+
+    def report(self, results):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = self.fp.report(results)
+        self.assertIn("commands, BLOCK=", out.getvalue())
+        return rc
+
+    def test_extract_continuations_prompts_and_languages(self):
+        md = "\n".join([
+            "```bash", "$ git commit \\", "  -m x", "# comment", "ls", "```",
+            "text", "```json", '{ "a": 1 }', "```",
+            "```text", "rm -rf /", "```",
+            "```", "vf > log", "```",
+            "```sh", "vf | tail  # fp-sweep: skip", "echo ok", "```",
+        ])
+        self.assertEqual(self.fp.extract_commands(md), [(2, "git commit -m x"), (5, "ls"), (15, "vf > log"), (19, "echo ok")])
+
+    def test_sweep_blocks_asks_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = os.path.join(d, "doc.md")
+            with open(doc, "w", encoding="utf-8") as f:
+                f.write("```bash\ngit reset --hard\nls\n```\n")
+            results = self.fp.sweep(root=self.fp.Path(d), files=[self.fp.Path(doc)])
+            self.assertEqual([(r[1], r[2], r[3].kind) for r in results], [(2, "git reset --hard", "ask"), (3, "ls", "allow")])
+            self.assertEqual(self.report(results), 0)                             # an ask does not fail the sweep
+            with open(doc, "w", encoding="utf-8") as f:
+                f.write("```bash\ngit commit --no-verify -m x\n```\n")
+            results = self.fp.sweep(root=self.fp.Path(d), files=[self.fp.Path(doc)])
+            self.assertEqual(results[0][3].kind, "block")
+            self.assertEqual(self.report(results), 1)
+
+    def test_the_docs_hold_no_blocked_command(self):
+        blocked = [(r[0], r[1], r[2]) for r in self.fp.sweep() if r[3].kind == "block"]
+        self.assertEqual(blocked, [])
+
+
 if __name__ == "__main__":
     unittest.main()
