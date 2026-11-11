@@ -655,8 +655,75 @@ class Rules1bTests(unittest.TestCase):
         self.assertTrue(err.startswith(b"BLOCK (AGENTKIT_HEADLESS=1: no user to ask): "), err)
 
 
+class BranchGoneTests(unittest.TestCase):
+    """`git branch -D` of branches whose upstream is gone (what /clean_gone deletes) in a real clone."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="guard-gone-")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@x", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+        def g(cwd, *args):
+            r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+            assert r.returncode == 0, (args, r.stderr)
+
+        remote, cls.repo = os.path.join(cls.tmp, "remote.git"), os.path.join(cls.tmp, "work")
+        g(cls.tmp, "init", "-q", "--bare", "-b", "main", remote)
+        g(cls.tmp, "clone", "-q", remote, cls.repo)
+        g(cls.repo, "commit", "-q", "--allow-empty", "-m", "init")
+        g(cls.repo, "push", "-q", "-u", "origin", "main")
+        for b in ("feat/done", "feat/done2", "release/1.0", "feat/live"):
+            g(cls.repo, "branch", b)
+            g(cls.repo, "push", "-q", "-u", "origin", b)
+        g(cls.repo, "branch", "feat/local-only")
+        for b in ("feat/done", "feat/done2", "release/1.0"):  # merged and deleted on the remote
+            g(cls.repo, "push", "-q", "origin", "--delete", b)
+        g(cls.repo, "fetch", "-q", "--prune")
+
+    @classmethod
+    def tearDownClass(cls):
+        def onerr(fn, path, _exc):
+            os.chmod(path, 0o700)
+            fn(path)
+        shutil.rmtree(cls.tmp, onerror=onerr)
+
+    def kind(self, cmd, data=None, cwd=None):
+        j = guard.Judge(guard.Config(data), "main", cwd or self.repo)
+        j.scan(cmd, 0)
+        return j.decision().kind
+
+    def test_branch_D_gone_allowed(self):
+        self.assertEqual(self.kind("git branch -D feat/done"), "allow")
+        self.assertEqual(self.kind("git branch -D feat/done feat/done2"), "allow")
+        self.assertEqual(self.kind("git branch -d -f feat/done"), "allow")
+        self.assertEqual(self.kind(f"git -C {self.repo.replace(os.sep, '/')} branch -D feat/done", cwd=self.tmp), "allow")  # from another directory
+        self.assertEqual(self.kind('bash -c "git branch -D feat/done"'), "allow")
+
+    def test_branch_D_not_gone_asks(self):
+        for cmd in ("git branch -D feat/live",              # upstream still there
+                    "git branch -D feat/local-only",        # no upstream at all
+                    "git branch -D feat/unknown",           # no such branch
+                    "git branch -D feat/done feat/live",    # one of two is not gone
+                    "git branch -D",                        # no operand
+                    "git branch -Dr origin/feat/done"):     # remote-tracking branches are another matter
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.kind(cmd), "ask")
+        self.assertEqual(self.kind("git branch -D feat/done", cwd=self.tmp), "ask")  # not a repo: git fails, so keep asking
+
+    def test_branch_D_protected_never_allowed(self):
+        self.assertEqual(self.kind("git branch -D release/1.0"), "ask")                # gone upstream, but protected
+        self.assertEqual(self.kind("git branch -D feat/done release/1.0"), "ask")
+        self.assertEqual(self.kind("git branch -D main"), "ask")
+        data = {"git": {"protected_branches": ["feat/done"]}}
+        self.assertEqual(self.kind("git branch -D feat/done", data=data), "ask")
+
+    def test_branch_D_gone_still_blocked_by_destructive_block(self):
+        self.assertEqual(self.kind("git branch -D feat/done", data={"guards": {"destructive": "block"}}), "block")
+
+
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard.py")
-ASK_COMMIT = "Commit on protected branch 'main'. Approve only if the user asked for it; otherwise create a task branch first."
+ASK_COMMIT ="Commit on protected branch 'main'. Approve only if the user asked for it; otherwise create a task branch first."
 ASK_JSON = ('{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"'
             + ASK_COMMIT + '"}}\n').encode()
 NOT_JSON = b"guard-git: stdin is not Claude Code hook JSON. Pass the command as arguments instead.\n"
