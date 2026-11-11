@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """Install agent-kit into a repo (or your user profile). Stdlib only, idempotent.
 
-  python tools/install.py <repo>          project install (recommended): core skills writing-plans, keeping-notes,
-                                          managing-git, verifying-changes, economizing-context
-  python tools/install.py <repo> --with experiments,prompts,grill,debug
-                                          also install optional skills (tracking-experiments, crafting-prompts,
-                                          grilling-designs, debugging-systematically); a later re-run keeps and
-                                          updates the ones already installed. AGENTS.md lists only installed skills.
+  python tools/install.py <repo>          project install (recommended): every skill of the kit (all are core)
   python tools/install.py --user          skills only, into ~/.claude/skills (all projects)
   python tools/install.py <repo> --force  overwrite existing .claude/skills/<name> entries
   python tools/install.py <repo> --hooks  also add a Claude Code SessionStart hook that runs `notes.py brief`
@@ -28,7 +23,7 @@ Project install does:
   <repo>/.claude/skills/<skill>     symlink to the above (copy if symlinks are unavailable)
   <repo>/AGENTS.md, CLAUDE.md, .agentkit.json, .claude/commands/*.md   created only if missing (task, grill)
   notes/ layout + .gitignore rule   via notes.py init
-  <repo>/.gitattributes             merge=union for notes/decisions.md, notes/debug.jsonl, experiments/runs.jsonl
+  <repo>/.gitattributes             merge=union for notes/decisions.md, notes/debug.jsonl, FAILURES.md
                                     (append-only logs: branches that both add entries merge without a conflict)
 """
 from __future__ import annotations
@@ -56,17 +51,11 @@ JQ_HINT = ("install jq (https://jqlang.org/download/): Windows `winget install j
            "  PATH; copy jq.exe into ~/bin or add its folder to PATH), macOS `brew install jq`, Debian/Ubuntu\n"
            "  `sudo apt install jq`. Check with: bash -c 'command -v jq'")
 ALL_SKILLS = {p.name: p for p in sorted((KIT / "skills").iterdir()) if (p / "SKILL.md").exists()}
-CORE = ("writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context")
-OPTIONAL = {"experiments": "tracking-experiments", "prompts": "crafting-prompts",
-            "grill": "grilling-designs", "debug": "debugging-systematically"}
-COMMAND_SKILL = {"grill.md": "grilling-designs"}  # command file -> skill it needs; others are always installed
-# short name, skill, script: the AGENTS.md "Short names" lines list only what is installed
+# short name, skill, script: the AGENTS.md "Short names" lines
 SHORT = (("nt", "keeping-notes", "notes.py"), ("gk", "managing-git", "gitkit.py"), ("pl", "writing-plans", "plan.py"),
          ("vf", "verifying-changes", "verify.py"), ("run", "economizing-context", "run.py"),
-         ("rmap", "economizing-context", "repomap.py"), ("ex", "tracking-experiments", "exp.py"),
-         ("pk", "crafting-prompts", "promptkit.py"), ("dbg", "debugging-systematically", "dbg.py"))
+         ("rmap", "economizing-context", "repomap.py"), ("dbg", "debugging-systematically", "dbg.py"))
 AGENTS_MARK = "<!-- Project-specific rules below this line -->"
-COND_RE = re.compile(r"<!--if:([a-z-]+)-->(.*?)<!--/if-->")
 
 
 def copy_skill(src: Path, dst: Path) -> None:
@@ -134,31 +123,11 @@ def merge_hook(repo: Path) -> tuple[str, int]:
 
 
 # ---------------------------------------------------------------- skill selection and templates
-def parse_with(value: str | None) -> list[str] | None:
-    """Skill names for `--with a,b`; None (after printing why) if a name is unknown."""
-    names = []
-    for w in (value or "").split(","):
-        w = w.strip()
-        if not w:
-            continue
-        if w not in OPTIONAL:
-            print(f"BLOCK: unknown --with '{w}'. Choose from: {', '.join(OPTIONAL)}")
-            return None
-        names.append(OPTIONAL[w])
-    return names
-
-
-def render(template: str, installed: set[str]) -> str:
-    """Fill {{SHORT_NAMES}} and drop <!--if:skill-->…<!--/if--> parts whose skill is not installed."""
-    items = [f"`{n}` {s}/scripts/{f}" for n, s, f in SHORT if s in installed]
+def render(template: str) -> str:
+    """Fill {{SHORT_NAMES}} with the short names of the kit's skills."""
+    items = [f"`{n}` {s}/scripts/{f}" for n, s, f in SHORT]
     short = "\n".join(" · ".join(items[i:i + 3]) for i in range(0, len(items), 3))
-    out = []
-    for line in template.replace("{{SHORT_NAMES}}", short).split("\n"):
-        new = COND_RE.sub(lambda m: m.group(2) if m.group(1) in installed else "", line)
-        if new != line and not new.strip():
-            continue  # the whole line belonged to a skill that is not installed
-        out.append(new)
-    return "\n".join(out)
+    return template.replace("{{SHORT_NAMES}}", short)
 
 
 # ---------------------------------------------------------------- git hooks
@@ -211,8 +180,7 @@ def union_paths(repo: Path) -> list[str]:
     except Exception:
         cfg = {}
     notes = (cfg.get("notes") or {}).get("dir", "notes").strip("/")
-    exp = (cfg.get("experiments") or {}).get("dir", "experiments").strip("/")
-    return [f"{notes}/decisions.md", f"{notes}/debug.jsonl", f"{exp}/runs.jsonl", "FAILURES.md"]
+    return [f"{notes}/decisions.md", f"{notes}/debug.jsonl", "FAILURES.md"]
 
 
 def merge_gitattributes(repo: Path) -> str:
@@ -550,8 +518,7 @@ def main() -> int:
     ap.add_argument("--user", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--hooks", action="store_true", help="add a Claude Code SessionStart hook (notes.py brief)")
-    ap.add_argument("--with", dest="with_", metavar="NAMES",
-                    help="optional skills, comma separated: " + ", ".join(f"{k} ({v})" for k, v in OPTIONAL.items()))
+    ap.add_argument("--with", dest="with_", metavar="NAMES", help=argparse.SUPPRESS)  # removed in 0.5.0
     ap.add_argument("--git-hooks", action="store_true", help="install pre-commit (scan) and commit-msg (lint-msg) git hooks")
     ap.add_argument("--uninstall-git-hooks", action="store_true", help="remove only the agent-kit blocks from git hooks")
     ap.add_argument("--guards", action="store_true",
@@ -565,10 +532,10 @@ def main() -> int:
         ap.error("git hooks and guards belong to a repo; give a repo path instead of --user")
     if a.team and not a.guards:
         ap.error("--team only applies to --guards")
-    extra = parse_with(a.with_)
-    if extra is None:
+    if a.with_ is not None:
+        print("BLOCK: --with was removed in 0.5.0 (every skill is core now), see CHANGELOG. Nothing was installed.")
         return 1
-    wanted = list(dict.fromkeys([*CORE, *extra]))
+    wanted = list(ALL_SKILLS)
     if a.user:
         dest = Path.home() / ".claude" / "skills"
         dest.mkdir(parents=True, exist_ok=True)
@@ -600,21 +567,18 @@ def main() -> int:
     canon = repo / ".agentkit" / "skills"
     canon.mkdir(parents=True, exist_ok=True)
     remove_legacy(repo)
-    # core + --with, plus optional skills an earlier install already put here (so a re-run updates them)
-    previous = [n for n in ALL_SKILLS if (canon / n / "SKILL.md").exists()]
-    for name in dict.fromkeys([*wanted, *previous]):
+    for name in wanted:
         copy_skill(ALL_SKILLS[name], canon / name)
         print(f"copy {canon / name}")
         print(link_or_copy(canon / name, repo / ".claude" / "skills" / name, a.force))
-    installed = {n for n in ALL_SKILLS if (canon / n / "SKILL.md").exists()}
 
     for name, src in (("AGENTS.md", KIT / "templates" / "AGENTS.md"),
                       ("CLAUDE.md", KIT / "templates" / "CLAUDE.md"),
                       (".agentkit.json", KIT / ".agentkit.example.json"),
                       *((f".claude/commands/{c.name}", c) for c in sorted((KIT / "templates" / "commands").glob("*.md"))
-                        if COMMAND_SKILL.get(c.name, "writing-plans") in installed)):
+                        )):
         dst = repo / name
-        rendered = render(src.read_text(encoding="utf-8"), installed) if name in ("AGENTS.md", "CLAUDE.md") else None
+        rendered = render(src.read_text(encoding="utf-8")) if name in ("AGENTS.md", "CLAUDE.md") else None
         if not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             if rendered is None:

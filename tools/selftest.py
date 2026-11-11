@@ -33,8 +33,6 @@ SCRIPTS = {
     "rmap": SK / "economizing-context/scripts/repomap.py",
     "run": SK / "economizing-context/scripts/run.py",
     "dbg": SK / "debugging-systematically/scripts/dbg.py",
-    "ex": SK / "tracking-experiments/scripts/exp.py",
-    "pk": SK / "crafting-prompts/scripts/promptkit.py",
     "validate": KIT / "tools/validate_skills.py",
     "install": KIT / "tools/install.py",
 }
@@ -439,7 +437,7 @@ def dc3(t: T):
 @scenario("DC4", "install copies the grilling-designs skill and /grill command")
 def dc4(t: T):
     d = t.repo()
-    code, out = kit("install", str(d), "--with", "grill", cwd=t.base)
+    code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[:300]}")
     check((d / ".agentkit/skills/grilling-designs/SKILL.md").is_file(), "skill not installed")
     check((d / ".claude/commands/grill.md").is_file() and (d / ".claude/commands/task.md").is_file(),
@@ -749,7 +747,7 @@ def b4c(t: T):
     check(code == 0, f"unrelated bug should not warn: exit {code}: {out[:200]}")
 
 
-@scenario("DB4", "dbg llm-case appends a valid case; promptkit check still passes; bad vars BLOCK")
+@scenario("DB4", "dbg llm-case appends a valid case; bad vars BLOCK")
 def b4d(t: T):
     spec = {"name": "qa", "target": "generic", "goal": "Answer the question from the documents.",
             "inputs": [{"name": "question", "description": "user question"}],
@@ -766,8 +764,6 @@ def b4d(t: T):
     got = json.loads((d / "prompts/qa.spec.json").read_text(encoding="utf-8"))
     check(got["cases"] == [{"vars": {"question": "How much is it?"},
                             "checks": [{"type": "not_contains", "value": "$"}], "source": bid}], f"cases: {got['cases']}")
-    code, out = kit("pk", "check", "prompts/qa.spec.json", cwd=d)
-    check(code == 0, f"promptkit check exit {code}: {out[:300]}")
 
 
 # ================================================================ ID branch-safe ids for append-only logs
@@ -790,13 +786,6 @@ def id1(t: T):
     t.write(d, {"plan.md": plan_with("D-001")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 2 and repl in out, f"plan cites superseded D-001: exit {code}: {out[:300]}")
-    runs = d / "experiments/runs.jsonl"
-    for name, old in (("a", "E-0001"), ("b", "E-0002")):
-        legacy(runs, new_id(kit("ex", "log", "--name", name, "--metric", "acc=0.5", cwd=d)[1], "E"), old)
-    code, out = kit("ex", "compare", "E-0001", "E-0002", cwd=d)
-    check(code == 0 and "E-0001" in out and "E-0002" in out, f"compare old ids: exit {code}: {out[:300]}")
-    code, out = kit("ex", "log", "--name", "c", "--metric", "acc=0.6", cwd=d)
-    check(new_id(out, "E") not in ("E-0001", "E-0002"), out[:200])
     legacy(d / "notes/debug.jsonl", new_id(kit("dbg", "open", "--layer", "code", "--symptom", "boom", cwd=d)[1], "B"),
            "B-001")
     code, out = kit("dbg", "close", "B-001", "--cause", "typo", cwd=d)
@@ -806,7 +795,7 @@ def id1(t: T):
 def two_branches(t: T, add) -> tuple[Path, str, str, str]:
     """Installed repo; branches a and b each call add(d, label) -> id, then both merge into main."""
     d = t.repo()
-    code, out = kit("install", str(d), "--with", "experiments", cwd=t.base)
+    code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[-300:]}")
     t.commit(d, "chore: install kit")
     ids = []
@@ -834,23 +823,10 @@ def id2(t: T):
     d, a, b, _ = two_branches(t, decide)
     kit("install", str(d), cwd=t.base)
     lines = (d / ".gitattributes").read_text(encoding="utf-8").splitlines()
-    for p in ("notes/decisions.md", "notes/debug.jsonl", "experiments/runs.jsonl"):
+    for p in ("notes/decisions.md", "notes/debug.jsonl", "FAILURES.md"):
         check(lines.count(f"{p} merge=union") == 1, f".gitattributes after 2 installs: {lines}")
     code, out = kit("nt", "show", cwd=d)
     check(code == 0 and a in out and b in out and "choice a" in out and "choice b" in out, f"show: {out[:300]}")
-
-
-@scenario("ID3", "two branches that each `ex log` merge cleanly; both runs listed with distinct ids")
-def id3(t: T):
-    def log(d: Path, b: str) -> str:
-        code, out = kit("ex", "log", "--name", f"run-{b}", "--metric", "acc=0.5", cwd=d)
-        check(code in (0, 2), f"ex log on {b}: {out[:200]}")
-        return new_id(out, "E")
-    d, a, b, _ = two_branches(t, log)
-    code, out = kit("ex", "list", cwd=d)
-    check(code == 0 and a in out and b in out, f"list: {out[:300]}")
-    code, out = kit("ex", "compare", a, b, cwd=d)
-    check(code == 0, f"compare merged runs: exit {code}: {out[:300]}")
 
 
 # ================================================================ B5 SessionStart hook
@@ -1040,46 +1016,32 @@ def listed_in_agents(d: Path) -> set:
     return set(re.findall(r"([a-z-]+)/scripts/", (d / "AGENTS.md").read_text(encoding="utf-8")))
 
 
-CORE5 = {"writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context"}
+ALL_NOW = {"writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context",
+           "debugging-systematically", "grilling-designs"}  # shrinks as 2a removes skills
 
 
-@scenario("B4", "default install = 5 core skills; --with adds optional ones; AGENTS.md lists exactly the installed")
+@scenario("B4", "default install = every skill of the kit; AGENTS.md lists exactly the ones that have scripts")
 def b4(t: T):
     d = t.repo("core")
     code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[-300:]}")
-    check(skills_in(d) == CORE5, f"installed: {sorted(skills_in(d))}")
+    check(skills_in(d) == ALL_NOW, f"installed: {sorted(skills_in(d))}")
     claude_skills = {p.name for p in (d / ".claude" / "skills").iterdir()}
-    check(claude_skills == CORE5, f".claude/skills: {sorted(claude_skills)}")
+    check(claude_skills == ALL_NOW, f".claude/skills: {sorted(claude_skills)}")
     text = (d / "AGENTS.md").read_text(encoding="utf-8")
-    check(listed_in_agents(d) == CORE5, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
-    check("`dbg`" not in text and "`ex run" not in text and "/grill" not in text and "<!--" not in text.replace(
-        "<!-- Project-specific rules below this line -->", ""), "optional skill lines leaked into AGENTS.md")
-    check("/grill" not in (d / "CLAUDE.md").read_text(encoding="utf-8"), "CLAUDE.md mentions /grill")
-    check(not (d / ".claude/commands/grill.md").exists() and (d / ".claude/commands/task.md").is_file(), "commands wrong")
+    check(listed_in_agents(d) == ALL_NOW - {"grilling-designs"}, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
+    check("<!--if" not in text and "`ex run" not in text, "conditional or removed-skill line leaked into AGENTS.md")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and skills_in(d) == ALL_NOW, f"re-run changed the set: {sorted(skills_in(d))}")
 
-    e = t.repo("opt")
-    code, out = kit("install", str(e), "--with", "experiments,prompts", cwd=t.base)
-    check(code == 0, f"install --with exit {code}: {out[-300:]}")
-    want = CORE5 | {"tracking-experiments", "crafting-prompts"}
-    check(skills_in(e) == want and len(want) == 7, f"installed: {sorted(skills_in(e))}")
-    check(listed_in_agents(e) == want, f"AGENTS.md lists {sorted(listed_in_agents(e))}")
-    check("`ex run" in (e / "AGENTS.md").read_text(encoding="utf-8"), "ex line missing")
 
-    # upgrading an existing install: a re-run without --with keeps optional skills; adding grill regenerates AGENTS.md
-    code, out = kit("install", str(e), cwd=t.base)
-    check(code == 0 and skills_in(e) == want, f"re-run changed the set: {sorted(skills_in(e))}")
-    code, out = kit("install", str(e), "--with", "grill,debug", cwd=t.base)
-    check(code == 0 and "update" in out and "AGENTS.md" in out, f"exit {code}: {out[-400:]}")
-    # grilling-designs has no script, so it has no short name; every other installed skill must be listed
-    check(len(skills_in(e)) == 9 and listed_in_agents(e) == skills_in(e) - {"grilling-designs"},
-          f"AGENTS.md lists {sorted(listed_in_agents(e))}")
-    check("/grill" in (e / "AGENTS.md").read_text(encoding="utf-8") and (e / ".claude/commands/grill.md").is_file(),
-          "grill not wired in")
-
-    f = t.repo("bad")
-    code, out = kit("install", str(f), "--with", "bogus", cwd=t.base)
-    check(code == 1 and "experiments" in out and not (f / ".agentkit").exists(), f"exit {code}: {out[-300:]}")
+@scenario("B5", "--with was removed in 0.5.0: any value exits 1, names the CHANGELOG and writes nothing")
+def with_flag_removed_exits_1(t: T):
+    for val in ("grill,debug", "experiments", "bogus"):
+        f = t.repo(f"bad-{val[:3]}")
+        code, out = kit("install", str(f), "--with", val, cwd=t.base)
+        check(code == 1 and "removed in 0.5.0" in out and "CHANGELOG" in out, f"--with {val}: exit {code}: {out[-300:]}")
+        check(not (f / ".agentkit").exists(), "--with must not install anything")
 
 
 # ================================================================ D bench harness (fake claude only)
@@ -1212,11 +1174,12 @@ def v2(t: T):
 
 
 # ================================================================ V validate the real kit
-@scenario("V", "validate_skills on the real kit: exit 0, all 9 skills ok")
+@scenario("V", "validate_skills on the real kit: exit 0, every skill ok")
 def v(t: T):
     code, out = kit("validate", cwd=t.base)
     oks = [l for l in out.splitlines() if l.startswith("ok ")]
-    check(code == 0 and len(oks) == 9 and "FAIL" not in out and "ERROR" not in out,
+    n_skills = len(list((KIT / "skills").glob("*/SKILL.md")))
+    check(code == 0 and len(oks) == n_skills and "FAIL" not in out and "ERROR" not in out,
           f"exit {code}, {len(oks)} ok lines: {out[:400]}")
 
 

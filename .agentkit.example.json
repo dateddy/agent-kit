@@ -87,22 +87,5 @@
     "deny_read": ["~/.ssh/**", "~/.aws/**", "~/.config/gh/**", "~/.gnupg/**", "**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"],
     "_allow_read": "exceptions to deny_read (templates people commit on purpose); written as Read(!pattern) carve-outs, which Claude Code honours only for relative patterns",
     "allow_read": ["**/.env.example", "**/.env.sample", "**/.env.template"]
-  },
-
-  "experiments": {
-    "dir": "experiments",
-    "_default_metrics": "columns shown by `exp.py list`, e.g. [\"eval.f1\", \"eval.recall@5\"]",
-    "default_metrics": []
-  },
-
-  "prompts": {
-    "dir": "prompts",
-    "_provider": "openai (any OpenAI-compatible server) | anthropic",
-    "provider": "openai",
-    "model": null,
-    "base_url": null,
-    "key_env": null,
-    "max_tokens_warn": 3000,
-    "timeout_s": 120
   }
 }

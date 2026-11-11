@@ -30,6 +30,6 @@ Common causes to check, in order of how often they turn out to be the answer. Te
 - Context problems: the answer was not in the retrieved text, the relevant passage was cut or buried, instructions far from the question.
 - Wrong language: state the output language in the prompt.
 - Temperature or model change between runs; compare the same input on both.
-- Target mismatch: a prompt written for one model family used on another (see crafting-prompts targets).
+- Target mismatch: a prompt written for one model family used on another.
 - Evidence to keep: the exact prompt, the raw output, the input variables, the model name and parameters.
-- A fixed failure becomes a permanent test: `dbg llm-case`, then `pk test`.
+- A fixed failure becomes a permanent test: `dbg llm-case`, then the project's prompt tests.

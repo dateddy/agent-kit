@@ -6,7 +6,7 @@ It is built around three goals:
 
 - **Spend fewer tokens.** The agent reads maps, outlines and summaries instead of whole files and full logs.
 - **Engineering over judgment.** Anything that has a rule (commit format, branch policy, secrets, plan completeness, test results) is decided by a Python script, not by the model.
-- **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, tracking experiments, writing prompts.
+- **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, debugging.
 
 All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#13-guards-scripts-that-always-run-v030) (`scripts/`) are bash wrappers around one Python script (`guard.py`): the `PreToolUse` guards need `bash` and Python 3.9+, `verify.sh`, `pre-push` and the installer also need `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
 
@@ -20,7 +20,7 @@ All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAM
 4. [Conventions you will see everywhere](#4-conventions-you-will-see-everywhere)
 5. [Skills](#5-skills)
    - Core: [writing-plans](#writing-plans) (Frame, lite path) · [keeping-notes](#keeping-notes) · [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [economizing-context](#economizing-context)
-   - Optional (`--with`): [grilling-designs](#grilling-designs-grill) · [debugging-systematically](#debugging-systematically) · [tracking-experiments](#tracking-experiments) · [crafting-prompts](#crafting-prompts)
+   - Also core: [grilling-designs](#grilling-designs-grill) · [debugging-systematically](#debugging-systematically)
 6. [Side questions without polluting the task context](#6-side-questions-without-polluting-the-task-context)
 7. [Configuration reference](#7-configuration-reference)
 8. [Using other agents](#8-using-other-agents)
@@ -48,8 +48,6 @@ agent-kit/
 │   ├── verifying-changes/     one PASS/FAIL verdict from lint/typecheck/test (verify.py)
 │   ├── debugging-systematically/  (optional) code / data / llm debugging + bug journal (dbg.py)
 │   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
-│   ├── tracking-experiments/  (optional) training/eval run log tied to git commits (exp.py)
-│   └── crafting-prompts/      (optional) prompts for a target model from a spec, with tests (promptkit.py)
 ├── scripts/                   guards (bash + python; verify.sh and pre-push also git + jq): guard.py, guard-git.sh, guard-fs.sh, py.sh,
 │                              verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh,
 │                              test-kit.sh + tests/
@@ -77,8 +75,7 @@ Token cost is layered (progressive disclosure):
 
 ```bash
 git clone <this repo> agent-kit
-python agent-kit/tools/install.py path/to/your-project                       # the five core skills
-python agent-kit/tools/install.py path/to/your-project --with experiments,prompts   # plus optional skills
+python agent-kit/tools/install.py path/to/your-project                       # all skills
 python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus enforcement by git hooks
 python agent-kit/tools/install.py path/to/your-project --guards              # plus the guards (needs bash, python, jq)
 ```
@@ -90,19 +87,17 @@ python agent-kit/tools/install.py path/to/your-project --guards              # p
 | Set | Skills | How to get them |
 |---|---|---|
 | Core (always) | `writing-plans`, `keeping-notes`, `managing-git`, `verifying-changes`, `economizing-context` | default |
-| Optional | `tracking-experiments` · `crafting-prompts` · `grilling-designs` (`/grill`) · `debugging-systematically` | `--with experiments,prompts,grill,debug` |
 
 `AGENTS.md` and `CLAUDE.md` are generated from what is installed: the short-name lines (`nt`, `gk`, …) and the rules for a skill appear only when that skill is installed. Re-running the installer keeps and updates optional skills already present and regenerates the part of `AGENTS.md` above the `Project-specific rules` marker (your own rules below it are never touched).
 
 | Flag | Effect |
 |---|---|
-| `--with a,b` | Add optional skills (`experiments`, `prompts`, `grill`, `debug`); an unknown name exits 1 and lists the choices |
 | `--git-hooks` | Install `pre-commit` (`gitkit scan --staged`) and `commit-msg` (`gitkit lint-msg`) git hooks; see [Git hooks](#11-git-hooks) |
 | `--uninstall-git-hooks` | Remove only the blocks the kit added to those hooks |
 | `--hooks` | Claude Code SessionStart hook that runs `notes.py brief` (below) |
 | `--guards` [`--team`] | The bash guards, their Claude Code hooks and a `pre-push` git hook; see [Guards](#13-guards-scripts-that-always-run-v030). Hooks go to the uncommitted `.claude/settings.local.json`; `--team` writes the shared `.claude/settings.json` instead |
 | `--force` | Overwrite existing `.claude/skills/<name>` entries that are not links |
-| `--user` | Skills only, into `~/.claude/skills` (core + `--with`) |
+| `--user` | Skills only, into `~/.claude/skills` (all skills) |
 
 What it does (safe to re-run; it never overwrites your files):
 
@@ -110,13 +105,13 @@ What it does (safe to re-run; it never overwrites your files):
 |---|---|
 | `.agentkit/skills/<skill>/` | Canonical copy of the installed skills (agent-neutral; `AGENTS.md` points here) |
 | `.claude/skills/<skill>` | Symlink to the above so Claude Code discovers the skills (copied if symlinks are unavailable) |
-| `.claude/commands/task.md` (`grill.md` with `--with grill`) | The `/task` and `/grill` commands for Claude Code |
+| `.claude/commands/task.md`, `grill.md` | The `/task` and `/grill` commands for Claude Code |
 | `AGENTS.md` | Rules for every agent, generated for the installed skills (created if missing; warns you to merge if you already have one without the project marker) |
 | `CLAUDE.md` | `@AGENTS.md` plus Claude Code extras (prepends `@AGENTS.md` to an existing file) |
 | `.agentkit.json` | Configuration (created if missing) |
 | `notes/decisions.md`, `.gitignore` rule for `notes/tasks/` | Notes layout |
 
-Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json` and `notes/decisions.md`. Logs (`.agentkit/logs/`, `experiments/logs/`, `prompts/runs/`) ignore themselves.
+Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json` and `notes/decisions.md`. Logs (`.agentkit/logs/`) ignore themselves.
 
 To update the kit later, pull it and run `install.py` again. An old `starting-tasks` skill (merged into `writing-plans` before 0.3, see [CHANGELOG.md](CHANGELOG.md)) is removed, and an old `/task` command is rewritten to point at `writing-plans`.
 
@@ -181,22 +176,18 @@ Out of scope: tuning hybrid weights.
 | `notes/tasks/<branch>.md` | Task note: goal, plan checklist, next step, log | No (personal) |
 | `notes/tasks/<branch>.plan.md` | The accepted plan | No |
 | `notes/decisions.md` | Append-only decision log | Yes |
-| `experiments/runs.jsonl` | Experiment records | Yes |
-| `prompts/*.spec.json`, `prompts/*.<target>.md` | Prompt specs and rendered prompts | Yes |
-| `.agentkit/logs/`, `experiments/logs/`, `prompts/runs/` | Full command/test/run logs | No |
+| `.agentkit/logs/` | Full command/test/run logs | No |
 
 ---
 
 ## 5. Skills
 
 Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`):
-`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rmap` repomap.py · `ex` exp.py · `pk` promptkit.py · `dbg` dbg.py.
+`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rmap` repomap.py · `dbg` dbg.py.
 
 `AGENTS.md` lists only the ones installed. You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
 
 ### grilling-designs (`/grill`)
-
-*Optional: `install.py --with grill`.*
 
 **What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rmap`, `rmap --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
 
@@ -412,8 +403,6 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 
 ### debugging-systematically
 
-*Optional: `install.py --with debug`.*
-
 **What it does:** stops guess-and-edit debugging. The agent classifies the failure first, follows that layer's procedure, and records the bug in an append-only journal (`notes/debug.jsonl`, committed) so a recurring bug is recognised.
 
 | Layer | Procedure |
@@ -431,7 +420,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 | `dbg close B-001 --cause "…" [--fix <sha>]` | Close with the root cause; without `--cause` it BLOCKs (exit 1) |
 | `dbg list [--open] [--layer L]` | Show bugs |
 | `dbg similar "<text>"` | Keyword overlap with past bugs |
-| `dbg llm-case B-001 --spec prompts/x.spec.json --vars '{…}' --check '{…}'` | Append a test case to the crafting-prompts spec (vars must match the declared inputs; check types are validated) |
+| `dbg llm-case B-001 --spec prompts/x.spec.json --vars '{…}' --check '{…}'` | Append a test case to the project's prompt spec (vars must match the declared inputs; check types are validated) |
 
 **Scenarios**
 
@@ -439,7 +428,7 @@ The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHI
 |---|---|
 | Test fails with a traceback | `dbg open --layer code`; `run` the repro; `rmap --zone-from-log` lists the files that matter; a failing test is written before the fix |
 | Retrieval returns nothing for Vietnamese queries | `--layer data`: inspect the documents (encoding, normalisation, counts) before changing the retriever |
-| The model invents a price | `--layer llm`: `dbg llm-case` adds the failing question with `not_contains` as a case; the prompt spec is changed and `pk test` re-run |
+| The model invents a price | `--layer llm`: `dbg llm-case` adds the failing question with `not_contains` as a case; the prompt is changed and the project's prompt tests re-run |
 | Same error as three weeks ago | `dbg open` prints the earlier bug and its cause as a WARN; the agent checks that cause first |
 | You try to close without knowing why | `dbg close` BLOCKs until a root cause is stated |
 
@@ -503,69 +492,6 @@ TAIL (20):
 | Test suite with verbose output | Whole log repeated on every later turn | The failing tests only |
 | About to change `retrieval/hybrid.py` | Greps for callers, opens each | `rmap --zone retrieval/hybrid.py`: importers, imports and their tests, as paths |
 
-### tracking-experiments
-
-*Optional: `install.py --with experiments`.*
-
-**What it does:** records every training/eval/benchmark run (git SHA, branch, uncommitted-change count, config, params, metrics, duration, exit code, log) in `experiments/runs.jsonl`, so questions about results are answered from data.
-
-**Commands**
-
-| Command | Purpose |
-|---|---|
-| `ex run --name dense-bge --config cfg.yaml --metrics out/metrics.json [--tag baseline] -- python train.py …` | Run and record |
-| `ex log --name bm25-only --param retriever=bm25 --metric f1=0.61 --note "colab"` | Record a run done elsewhere |
-| `ex list [--sort eval.f1] [--cols eval.f1,recall@5] [--where train.lr=0.0003] [--name dense]` | Table of runs (`*` = uncommitted changes at run time) |
-| `ex compare E-0003 E-0007` | Params that differ, metric deltas, code diff hint |
-| `ex best --metric eval.f1 [--asc]` | Best run, its params and how to reproduce it |
-| `ex show E-0007` | Full record |
-
-Your training script only has to write its final metrics to a JSON/YAML file (or a `.jsonl` whose last line is the final metrics). Nested config keys are flattened (`train.lr`).
-
-**Scenarios**
-
-| Situation | You type | What happens |
-|---|---|---|
-| Launch a run | `train with lr 3e-4` | `ex run … --param train.lr=0.0003 -- python train.py …` |
-| Uncommitted code during a run | (automatic) | WARN: the run cannot be reproduced from its SHA; the agent suggests committing first |
-| "Which config gave the best F1?" | `? best f1 so far` | `ex best --metric eval.f1` with the run id and reproduce command |
-| "Why did E-12 beat E-9?" | `? compare E-0009 E-0012` | Param diff and metric deltas; points to `git diff` if the code changed |
-| Results from Colab / a GPU server | `log this run: f1 0.81, lr 1e-4, colab` | `ex log …` |
-
-### crafting-prompts
-
-*Optional: `install.py --with prompts`.*
-
-**What it does:** builds prompts for the **target model your code calls** (not the agent) from a JSON spec. The script finds missing information and turns it into precise questions, renders a layout suited to the model family, lints the wording, and tests cases against an API.
-
-**Workflow:** `pk init <name> --target <t>` → agent fills `prompts/<name>.spec.json` from your request → `pk check` (missing fields become "ASK THE USER" questions, asked in one message) → `pk render` → `pk lint` → `pk test`.
-
-**Targets** (`pk targets`; add your own in `prompts/profiles.json`):
-
-| Target | Use for | Rendering differences |
-|---|---|---|
-| `claude` | Claude models | XML-tagged sections; long documents before the question |
-| `gpt` | GPT-style chat models | Markdown sections |
-| `open-small` | Qwen, Llama, Gemma, Vistral, other small open models | Examples required; ≤8 numbered rules; format restated at the end |
-| `reasoning` | Models that reason internally | Warns on "step by step"/"think carefully" |
-| `generic` | Unknown / mixed | Plain markdown |
-
-**Output:** `prompts/<name>.<target>.md` with a `=== SYSTEM ===` part and a `=== USER ===` part containing `{{placeholders}}` your code fills in.
-
-**Lint checks:** token estimate (Vietnamese-aware), vague words ("appropriate", "relevant", "etc", "phù hợp"), ALL-CAPS emphasis overuse, prohibition-heavy rules, missing output format, duplicated lines, phrases that hurt the chosen target.
-
-**Testing:** `pk test prompts/<name>.spec.json --model <m>` uses `$OPENAI_API_KEY` (any OpenAI-compatible server: OpenAI, OpenRouter, vLLM, Ollama, LM Studio via `--base-url`) or `--provider anthropic` with `$ANTHROPIC_API_KEY`. Check types: `contains`, `not_contains`, `regex`, `equals`, `max_words`, `max_chars`, `json_keys`, `valid_json`. Outputs are saved to `prompts/runs/`.
-
-**Scenarios**
-
-| Situation | You type | What happens |
-|---|---|---|
-| New RAG prompt | `write the answer prompt for ViMed-RAG, model is Qwen2.5-7B` | `pk init medical-qa --target open-small`; asks for anything missing (output schema, examples, test cases); renders, lints, tests |
-| Porting a prompt to another model | `make this prompt work for Claude` | Same spec, `pk render --target claude`, re-run tests |
-| A prompt gives bad answers | `case 2 returns an answer when the docs don't contain one` | Adds or adjusts an instruction and an example in the spec, re-renders, runs `pk test --case 2` |
-| Reviewing an existing prompt file | `review prompts/old.txt` | `pk lint prompts/old.txt --target gpt` and concrete fixes |
-| No API key | — | Spec, check, render and lint still work; testing is skipped and the agent says so |
-
 ---
 
 ## 6. Side questions without polluting the task context
@@ -601,16 +527,13 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | `debug.min_similarity` | 0.4 | Keyword overlap (0–1) at which `dbg` calls two bugs similar |
 | `verify.format/lint/typecheck/test` | `auto` | `auto`, a command, or `null` to skip |
 | `guards.*` | see [Guards](#configuration-guards) | `ruff`, `pytest`, `diff_cover`, `scope` switches, tool commands, `fail_under`, `coverage_xml`, `scope_ignore`, `merge_convention`, `require_merge_commits`, `verify_on_push` |
-| `experiments.dir`, `experiments.default_metrics` | `experiments`, `[]` | Run log location; columns for `ex list` |
-| `prompts.dir/provider/model/base_url/key_env` | `prompts`, `openai`, — | Defaults for `pk test` |
-| `prompts.max_tokens_warn` | 3000 | Lint warning threshold |
 
 ## 8. Using other agents
 
 - **Rules:** most agents read `AGENTS.md` at the repo root. Claude Code reads `CLAUDE.md`, which imports `AGENTS.md`.
 - **Skills:** `AGENTS.md` refers to scripts by path under `.agentkit/skills/`, so any agent that can run a terminal command can use them. Agents that support the SKILL.md format natively can also be pointed at `.agentkit/skills/`.
 - **Read-only mode:** for a series of questions, use your agent's read-only mode on top of the `?` prefix (Claude Code plan mode, Cursor Ask mode).
-- **Claude-Code-only extras:** `/task` (and `/grill` with `--with grill`) as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
+- **Claude-Code-only extras:** `/task` (and `/grill`) as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
 
 ## 9. Troubleshooting
 
@@ -619,13 +542,11 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 | A skill does not trigger | Name it in the request ("use managing-git to commit") or check `validate_skills.py`. In Claude Code you can also call `/managing-git` |
 | `verify.py` says "tool missing" | Install the tool declared by the project, or set the gate's command in `.agentkit.json` |
 | `gitkit preflight merge` cannot predict conflicts | Needs git ≥ 2.38 (`merge-tree --write-tree`) |
-| YAML config in `ex run` fails | `pip install pyyaml`, or use a JSON config |
 | `nt brief` shows no task | You are on a branch without a task note (e.g., `main`); it lists open tasks to switch to |
 | Windows: no symlinks | The installer copies instead; re-run it after updating the kit |
 | Windows: garbled Vietnamese or `UnicodeEncodeError` | Update the kit: every script now switches stdout/stderr to UTF-8; `python tools/selftest.py --cp1252` checks it |
 | A commit is rejected by a git hook | Read the `BLOCK:`/`ERROR:` lines the hook printed, fix the cause (remove the secret, reword the message) and commit again. Never `--no-verify` |
 | `vf` says `NOTHING VERIFIED` though tests exist | `vf --detect` shows the reason (for example `pytest not runnable: …`); set `verify.test` in `.agentkit.json` if detection is wrong |
-| `pk test` cannot connect | Check `--base-url` (include `/v1` for OpenAI-compatible servers) and that the key env var is set |
 
 ## 10. Adding your own skill
 

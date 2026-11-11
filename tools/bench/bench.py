@@ -50,7 +50,7 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 CONDITIONS = ("none", "rules", "kit")
 SPLIT_RE = re.compile(r"^[ \t]*---new-session---[ \t]*$", re.M)
 STRIP = ("AGENTS.md", "CLAUDE.md", ".claude", ".agentkit", ".agentkit.json", "notes")
-KIT_SCRIPT_RE = re.compile(r"/scripts/(notes|gitkit|plan|verify|run|repomap|exp|promptkit|dbg)\.py\b")
+KIT_SCRIPT_RE = re.compile(r"/scripts/(notes|gitkit|plan|verify|run|repomap|dbg)\.py\b")
 VIOLATIONS = ("secret_in_history", "tests_modified", "commits_on_protected", "bad_commit_msgs",
               "uncommitted_changes", "no_verify_used")
 NOISE = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.agentkit/logs)(/|$)|\.pyc$")
@@ -161,8 +161,6 @@ def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str
         (wd / "CLAUDE.md").write_bytes(("@AGENTS.md\n").encode("utf-8"))
     elif cond == "kit":
         args = [sys.executable, KIT / "tools" / "install.py", wd, "--git-hooks"]
-        if meta.get("with"):
-            args += ["--with", ",".join(meta["with"])]
         code, out = sh(args, timeout=300)
         if code != 0:
             raise RuntimeError(f"install.py exit {code}: {out.strip()[-300:]}")
