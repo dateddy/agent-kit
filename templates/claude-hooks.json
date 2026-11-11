@@ -5,6 +5,10 @@
       {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.agentkit/scripts/guard-git.sh\""}]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.agentkit/scripts/guard-fs.sh\""}]
       }
     ],
     "PostToolUse": [

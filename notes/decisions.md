@@ -54,3 +54,7 @@ Why: Same scope and same uninstall story.
 ## D-45a3 · 2026-11-11 · guards-fp-sweep · feat/guard-fs
 tools/fp_sweep.py scans doc code blocks, runs in CI, exits 1 on any BLOCK.
 Why: Keeps false-positive BLOCKs at 0 as rules grow.
+
+## D-baf8 · 2026-11-11 · guards-perm-deny-syntax · feat/guard-fs
+permissions.deny from fs.deny_read: Read(~/x/**) and relative Read(**/.env) as is, absolute /x as //x, C:/x as //c/x; fs.allow_read becomes Read(!pattern) (relative patterns only). Docs (code.claude.com/docs/en/permissions): a Read deny also applies best-effort to Grep/Glob and Edit/Write, deny beats allow, ! carves out of earlier same-file relative rules only, relative rules match under the project dir only.
+Why: Read official docs instead of guessing; //-anchored rules cannot take a ! exception, so .env.example stays readable only with relative patterns.

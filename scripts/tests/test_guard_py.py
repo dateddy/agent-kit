@@ -1226,5 +1226,66 @@ class WrapperTests(unittest.TestCase):
             self.assertEqual((rc, out), (2, ""), err)                          # hook mode: only exit 2 blocks
 
 
+    FS_WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "guard-fs.sh")
+
+    def run_script(self, script, dirs, *args, stdin=b"", extra_env=None, cwd=None):
+        env = dict(os.environ, PATH=os.pathsep.join(dirs + [os.path.dirname(shutil.which("bash"))]), **(extra_env or {}))
+        p = subprocess.run([shutil.which("bash"), script, *args], input=stdin, capture_output=True, env=env, cwd=cwd)
+        return p.returncode, p.stdout.decode(), p.stderr.decode()
+
+    def test_wrappers_share_py_sh(self):
+        stub = self.fake("Apps/WindowsApps", "python3", "echo STUB; exit 9")
+        real = self.fake("bin", "python", 'echo "FAKE $@"')
+        for script, sub in ((self.WRAPPER, "bash"), (self.FS_WRAPPER, "edit")):
+            with self.subTest(script=os.path.basename(script)):
+                rc, out, err = self.run_script(script, [stub, real], "x")
+                self.assertEqual(rc, 0, err)
+                self.assertNotIn("STUB", out)                                    # the Store stub is skipped by both
+                self.assertIn(f"guard.py {sub} x", out)
+        self.fake("Apps/WindowsApps", "python", "echo STUB; exit 9")             # both names are the Store stub: py -3 is next
+        launcher = self.fake("launcher", "py", 'echo "PYLAUNCHER $@"')
+        rc, out, err = self.run_script(self.FS_WRAPPER, [stub, launcher], "x")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(out.startswith("PYLAUNCHER -3 "), out)
+
+    def test_guard_fs_wrapper_hook_json_and_exit_codes(self):
+        py = os.path.dirname(sys.executable)
+        home = os.path.join(self.tmp.name, "home")
+        proj = os.path.join(self.tmp.name, "proj")                               # the project root: the home directory is outside it
+        os.makedirs(home)
+        os.makedirs(proj)
+        with open(os.path.join(proj, ".agentkit.json"), "w", encoding="utf-8") as f:
+            json.dump({"fs": {"allow_write": []}}, f)                           # the scratch directory (where this test lives) is not allowed
+        env = {"HOME": home, "USERPROFILE": home, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        payload = json.dumps({"tool_input": {"file_path": "~/agentkit-guard-fs-test.txt"}, "cwd": proj}).encode()
+        rc, out, err = self.run_script(self.FS_WRAPPER, [py], stdin=payload, extra_env=env, cwd=proj)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+        self.assertIn("agentkit-guard-fs-test.txt", out)
+        rc, out, err = self.run_script(self.FS_WRAPPER, [py], stdin=payload, extra_env=dict(env, AGENTKIT_HEADLESS="1"), cwd=proj)
+        self.assertEqual((rc, out), (2, ""))                                      # hook mode: only exit 2 blocks
+        self.assertIn("AGENTKIT_HEADLESS=1", err)
+        rc, out, err = self.run_script(self.FS_WRAPPER, [py], "~/agentkit-guard-fs-test.txt", extra_env=dict(env, AGENTKIT_HEADLESS="1"), cwd=proj)
+        self.assertEqual((rc, out), (1, ""))                                      # argument mode: exit 1
+        rc, out, err = self.run_script(self.FS_WRAPPER, [py], "inside.txt", extra_env=env, cwd=proj)
+        self.assertEqual((rc, out, err), (0, "", ""))                             # a file in the working directory is fine
+
+    def test_hook_block_uses_the_py_sh_function(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("agentkit_install_t", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "install.py"))
+        install = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(install)
+        body = install.find_py_function()
+        self.assertTrue(any("WindowsApps" in line for line in body), body)
+        for name in ("pre-commit", "commit-msg"):
+            block = install.hook_block(name).split("\n")
+            start = block.index(body[0])
+            self.assertEqual(block[start:start + len(body)], body, name)       # the same lines as scripts/py.sh, no second copy of the logic
+            self.assertEqual(sum("command -v python3" in line or 'command -v "$ak_c"' in line for line in block), 1, name)
+            self.assertFalse(any("elif command -v python" in line for line in block), name)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "py.sh"), encoding="utf-8") as f:
+            self.assertIn("\n".join(body), f.read())
+
+
 if __name__ == "__main__":
     unittest.main()

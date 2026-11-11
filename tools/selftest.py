@@ -526,12 +526,14 @@ def g1(t: T):
     d = t.repo("g1")
     code, out = kit("install", str(d), "--guards", cwd=t.base)
     check(code == 0, f"exit {code}: {out[-400:]}")
-    for n in ("lib.sh", "guard-git.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push"):
+    for n in ("lib.sh", "py.sh", "guard-git.sh", "guard-fs.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push"):
         f = d / ".agentkit/scripts" / n
         check(f.is_file() and b"\r" not in f.read_bytes(), f"{n} missing or has CR")
     hooks = settings_of(d)["hooks"]
     check(set(hooks) == {"PreToolUse", "PostToolUse", "Stop"}, f"events: {sorted(hooks)}")
     check(hooks["PreToolUse"][0]["matcher"] == "Bash" and "guard-git.sh" in hooks["PreToolUse"][0]["hooks"][0]["command"], "PreToolUse")
+    check(hooks["PreToolUse"][1]["matcher"] == "Edit|Write|MultiEdit|NotebookEdit" and "guard-fs.sh" in hooks["PreToolUse"][1]["hooks"][0]["command"],
+          f"PreToolUse guard-fs: {hooks['PreToolUse']}")
     check(hooks["PostToolUse"][0]["matcher"] == "Edit|Write" and "ruff-fix.sh" in hooks["PostToolUse"][0]["hooks"][0]["command"], "PostToolUse")
     check(hooks["Stop"][0]["hooks"][0]["command"].endswith("verify.sh\" --hook"), "Stop")
     check(not (d / ".claude/settings.json").exists(), "team file written without --team")
@@ -596,7 +598,9 @@ def g2(t: T):
         code, out = kit("install", str(d), "--guards", cwd=t.base)
         check(code == 0, f"exit {code}: {out[-300:]}")
     s = settings_of(d)
-    check(s["permissions"] == mine["permissions"], "permissions lost")
+    check(s["permissions"]["allow"] == mine["permissions"]["allow"], "permissions.allow lost")
+    check("Read(~/.ssh/**)" in s["permissions"]["deny"] and "Read(!**/.env.example)" in s["permissions"]["deny"],
+          f"permissions.deny after install: {s['permissions'].get('deny')}")
     cmds = [h["command"] for g in s["hooks"]["Stop"] for h in g["hooks"]]
     check(cmds[0] == "echo mine" and len(cmds) == 2, f"Stop hooks after two installs: {cmds}")
     check("keep" in out and "already present" in out, f"second run should keep: {out[-300:]}")
@@ -609,6 +613,35 @@ def g2(t: T):
     code, out = kit("install", str(f), "--guards", cwd=t.base)
     check(code == 2 and "left untouched" in out, f"invalid JSON: exit {code}: {out[-300:]}")
     check((f / ".claude/settings.local.json").read_text(encoding="utf-8") == "{ not json", "invalid file was modified")
+
+
+@scenario("G7", "install --guards on an older install adds guard-fs and the Read deny rules once, keeping what the user had")
+def g7(t: T):
+    d = t.repo("g7")
+    cmd = lambda name: 'bash "$CLAUDE_PROJECT_DIR/.agentkit/scripts/' + name + '"'  # noqa: E731
+    old = {"permissions": {"deny": ["Bash(curl *)"]},
+           "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": cmd("guard-git.sh")}]}],
+                     "PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": cmd("ruff-fix.sh")}]}],
+                     "Stop": [{"hooks": [{"type": "command", "command": cmd("verify.sh") + " --hook"}]}]}}
+    t.write(d, {".claude/settings.local.json": json.dumps(old)})
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    check(code == 0 and "permissions" in out, f"exit {code}: {out[-400:]}")
+    after_first = (d / ".claude/settings.local.json").read_text(encoding="utf-8")
+    code, out = kit("install", str(d), "--guards", cwd=t.base)
+    check(code == 0 and (d / ".claude/settings.local.json").read_text(encoding="utf-8") == after_first, "a second run changed the settings")
+    s = settings_of(d)
+    cmds = [h["command"] for g in s["hooks"]["PreToolUse"] for h in g["hooks"]]
+    check(len(cmds) == 2 and sum("guard-git.sh" in c for c in cmds) == 1 and sum("guard-fs.sh" in c for c in cmds) == 1, f"PreToolUse: {cmds}")
+    check(len(s["hooks"]["PostToolUse"]) == 1 and len(s["hooks"]["Stop"]) == 1, "an old hook was duplicated")
+    deny = s["permissions"]["deny"]
+    check(deny[0] == "Bash(curl *)" and "Read(~/.ssh/**)" in deny and len(deny) == len(set(deny)), f"deny: {deny}")
+    check(deny.index("Read(!**/.env.example)") > deny.index("Read(**/.env.*)"), "a ! carve-out must come after the rules it carves from")
+    e = t.repo("g7b")
+    t.write(e, {".agentkit.json": json.dumps({"fs": {"deny_read": ["**/secret.txt", "C:/vault/**", "/srv/keys/**"], "allow_read": ["~/x", "**/secret.txt.sample"]}})})
+    code, out = kit("install", str(e), "--guards", cwd=t.base)
+    deny = settings_of(e)["permissions"]["deny"]
+    check(code == 0 and deny == ["Read(**/secret.txt)", "Read(//c/vault/**)", "Read(//srv/keys/**)", "Read(!**/secret.txt.sample)"], f"custom fs: {deny}")
+    check("fs.allow_read '~/x' cannot be a Claude Code ! carve-out" in out, f"note missing: {out[-500:]}")
 
 
 @scenario("G3", "merge.ff is set only after an explicit yes; its effect is printed first")
@@ -896,8 +929,9 @@ def b3p(t: T):
     for name in ("pre-commit", "commit-msg"):
         hook = d / ".git" / "hooks" / name
         text = hook.read_text(encoding="utf-8")
-        text = re.sub(r"^ak_py=.*$", "ak_py=/nonexistent/python", text, flags=re.M)
-        text = "\n".join(l for l in text.splitlines() if not l.startswith("  elif command -v")) + "\n"
+        text = re.sub(r"^ak_pref=.*$", "ak_pref=/nonexistent/python", text, flags=re.M)  # the interpreter the installer saw
+        check("  elif ak_find_py; then" in text, f"hook block does not use the shared finder (scripts/py.sh): {text[:300]}")
+        text = text.replace("  elif ak_find_py; then", "  elif false; then")  # as if python3, python and py were all missing
         hook.write_bytes(text.encode("utf-8"))
     code, out = commit_try(d, "bad message", {"a.txt": "x\n"}, t)
     check(code == 0, f"commit must still pass, exit {code}: {out[-300:]}")
