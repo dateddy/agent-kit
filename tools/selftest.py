@@ -1391,10 +1391,14 @@ def capture(cmd: list, cwd: Path) -> tuple[int, str, str]:
 
 @scenario("PF1", "plan.py field behind plan-step.sh gives the 0.4.0 awk's stdout, stderr and exit code, case by case")
 def plan_field_parity(t: T):
+    need_jq()  # the 0.4.0 script reads its config with jq
+    bash = bash_exe()  # Git bash on Windows: System32 bash is the WSL launcher and would make both sides print its error
     old = old_kit(t) / "scripts" / "plan-step.sh"
     new = KIT / "scripts" / "plan-step.sh"
     d = t.repo("pf", files={"notes/tasks/main.plan.md": PARITY_PLAN, "notes/tasks/main.md": PARITY_NOTE})
     t.write(d, {"crlf.plan.md": PARITY_PLAN.replace("\n", "\r\n")})
+    check(capture([bash, old, "title", "--step", "1", "--plan", "notes/tasks/main.plan.md"], d) == (0, "First step" + chr(10), ""),
+          "the 0.4.0 script does not run here, so a comparison would prove nothing")
     fields = ("title", "mode", "files", "contract", "tests", "out-of-scope", "verify", "do", "done", "colour")
     arg_sets = ([], ["--cumulative"], ["--step", "2"], ["--step", "2", "--cumulative"], ["--step", "4", "--cumulative"],
                 ["--step", "9"], ["--step", "x"], ["--step", "5"],
@@ -1403,18 +1407,18 @@ def plan_field_parity(t: T):
     n = 0
     for fld in fields:
         for args in arg_sets:
-            want, got = capture(["bash", old, fld, *args], d), capture(["bash", new, fld, *args], d)
+            want, got = capture([bash, old, fld, *args], d), capture([bash, new, fld, *args], d)
             check(want == got, f"plan-step.sh {fld} {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
             n += 1
     for args in ([], ["files", "--note", "notes/tasks/main.md"]):
-        want, got = capture(["bash", old, *args], d), capture(["bash", new, *args], d)
+        want, got = capture([bash, old, *args], d), capture([bash, new, *args], d)
         check(want == got, f"plan-step.sh {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
     git(d, "switch", "-q", "--detach")  # detached HEAD without --plan/--note
-    want, got = capture(["bash", old, "files"], d), capture(["bash", new, "files"], d)
+    want, got = capture([bash, old, "files"], d), capture([bash, new, "files"], d)
     check(want == got and want[0] == 1, f"detached HEAD\n  0.4.0: {want!r}\n  now:   {got!r}")
     check(n == len(fields) * len(arg_sets), "case count")
     # `--step 0 --cumulative` depended on the platform's seq in 0.4.0 (GNU: empty output, BSD: error); now always the error
-    code, out, err = capture(["bash", new, "title", "--step", "0", "--cumulative", "--plan", "notes/tasks/main.plan.md",
+    code, out, err = capture([bash, new, "title", "--step", "0", "--cumulative", "--plan", "notes/tasks/main.plan.md",
                           "--note", "notes/tasks/main.md"], d)
     check(code == 1 and out == "" and "step 0 not found in the plan" in err, f"step 0 cumulative: {code} {out!r} {err!r}")
 
