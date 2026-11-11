@@ -1044,6 +1044,138 @@ def with_flag_removed_exits_1(t: T):
         check(not (f / ".agentkit").exists(), "--with must not install anything")
 
 
+# ================================================================ MG migration from a 0.4.0 install
+def old_kit(t: T, tag: str = "v0.4.0") -> Path:
+    """The kit as released at `tag`, read from git (CI checks out with fetch-depth 0 so the tag exists)."""
+    import io
+    import tarfile
+    r = subprocess.run(["git", "archive", "--format=tar", tag], cwd=KIT, capture_output=True)
+    check(r.returncode == 0, f"git archive {tag} failed (is the tag fetched?): {r.stderr.decode(errors='replace')[:200]}")
+    dst = t.base / "oldkit"
+    dst.mkdir(exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tf:
+        try:
+            tf.extractall(dst, filter="data")
+        except TypeError:  # Python without the extraction filters
+            tf.extractall(dst)
+    return dst
+
+
+def repo_040(t: T, name: str = "mig", optional: bool = True, files: dict | None = None) -> Path:
+    """A repo installed by the real 0.4.0 installer, with all optional skills unless optional=False."""
+    d = t.repo(name, files=files)
+    args = ["--with", "experiments,prompts,grill,debug"] if optional else []
+    code, out = run([sys.executable, old_kit(t) / "tools" / "install.py", d, *args, "--git-hooks"], t.base)
+    check(code == 0, f"0.4.0 install exit {code}: {out[-300:]}")
+    t.commit(d, "chore: install kit 0.4.0")
+    return d
+
+
+def tree_snapshot(d: Path) -> dict:
+    import hashlib
+    return {p.relative_to(d).as_posix(): hashlib.sha1(p.read_bytes()).hexdigest()
+            for p in sorted(d.rglob("*")) if p.is_file() and ".git" not in p.relative_to(d).parts}
+
+
+USER_DATA = {"experiments/runs.jsonl": '{"id": "E-1", "name": "dense"}\n',
+             "prompts/qa.spec.json": '{"name": "qa"}\n'}
+
+
+@scenario("MG1", "0.4.0 -> 0.5.0: unmodified removed skills are deleted, debugging stays installed, user data untouched")
+def migrate_040_removes_unmodified(t: T):
+    d = repo_040(t, files=USER_DATA)
+    before = {p: (d / p).read_bytes() for p in USER_DATA}
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"upgrade exit {code}: {out[-400:]}")
+    for gone in ("crafting-prompts", "tracking-experiments"):
+        check(not (d / ".agentkit/skills" / gone).exists(), f"{gone} still in .agentkit/skills")
+        check(not (d / ".claude/skills" / gone).exists() and not (d / ".claude/skills" / gone).is_symlink(),
+              f"{gone} still in .claude/skills")
+        check(f"remove {d / '.agentkit/skills' / gone}" in out, f"no remove line for {gone}: {out[-400:]}")
+    check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
+    for p, data in before.items():
+        check((d / p).read_bytes() == data, f"user data changed: {p}")
+
+
+@scenario("MG2", "0.4.0 -> 0.5.0: a modified removed skill is kept with a WARN, the unmodified one still goes")
+def migrate_040_keeps_modified(t: T):
+    d = repo_040(t)
+    md = d / ".agentkit/skills/tracking-experiments/SKILL.md"
+    md.write_text(md.read_text(encoding="utf-8") + "\nOur own rule: always pass --tag.\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 2 and "WARN keep" in out and "modified" in out, f"exit {code}: {out[-400:]}")
+    check(md.is_file() and "Our own rule" in md.read_text(encoding="utf-8"), "modified skill was changed or removed")
+    check(not (d / ".agentkit/skills/crafting-prompts").exists(), "unmodified sibling should be removed")
+
+
+@scenario("MG3", "0.4.0 -> 0.5.0: a removed skill the project's own rules still call is kept with a WARN")
+def migrate_040_keeps_in_use(t: T):
+    d = repo_040(t)
+    agents = d / "AGENTS.md"
+    agents.write_text(agents.read_text(encoding="utf-8").rstrip("\n") + "\n\n## Experiments\n"
+                      "- Runs go through `ex run ... -- <cmd>`, never bare.\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 2 and "still use" in out, f"exit {code}: {out[-400:]}")
+    check((d / ".agentkit/skills/tracking-experiments/SKILL.md").is_file(), "in-use skill was removed")
+    check("`ex run ... -- <cmd>`" in agents.read_text(encoding="utf-8"), "project rules were rewritten")
+    check(not (d / ".agentkit/skills/crafting-prompts").exists(), "unused sibling should be removed")
+
+
+@scenario("MG4", "migration of a command and of skills the kit stops shipping: grill.md, managing-git, grilling-designs")
+def migrate_grill_cmd(t: T):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kit_install_mg4", KIT / "tools" / "install.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    d = repo_040(t)
+    cmds = d / ".claude/commands"
+    check((cmds / "grill.md").is_file(), "fixture has no grill.md")
+    # the kit of the future ships none of these; run only the migration step
+    code = mod.migrate_removed(d, {"writing-plans", "keeping-notes", "verifying-changes", "economizing-context",
+                                   "debugging-systematically"}, {"task.md"})
+    check(code == 0, f"migrate exit {code}")
+    check(not (cmds / "grill.md").exists(), "unmodified grill.md should be removed")
+    for gone in ("grilling-designs", "managing-git", "crafting-prompts", "tracking-experiments"):
+        check(not (d / ".agentkit/skills" / gone).exists(), f"{gone} should be removed")
+    check((d / ".agentkit/skills/writing-plans/SKILL.md").is_file(), "a kept skill was touched")
+    # a user-edited command is kept
+    e = repo_040(t, "mig2")
+    g = e / ".claude/commands/grill.md"
+    g.write_text(g.read_text(encoding="utf-8") + "\nteam tweak\n", encoding="utf-8")
+    code = mod.migrate_removed(e, set(), {"task.md"})
+    check(code == 2 and "team tweak" in g.read_text(encoding="utf-8"), f"modified grill.md: exit {code}")
+
+
+@scenario("MG5", "0.4.0 core-only install gains debugging-systematically and notes/knowledge.md on upgrade")
+def migrate_installs_debugging_and_knowledge(t: T):
+    d = repo_040(t, "core", optional=False)
+    check(not (d / ".agentkit/skills/debugging-systematically").exists(), "fixture should not have debugging")
+    check(not (d / "notes/knowledge.md").exists(), "fixture should not have knowledge.md")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"upgrade exit {code}: {out[-400:]}")
+    check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
+    know = d / "notes/knowledge.md"
+    check(know.is_file() and "verified YYYY-MM-DD" in know.read_text(encoding="utf-8"), "knowledge.md missing or no format line")
+    check(not [l for l in know.read_text(encoding="utf-8").splitlines() if l.startswith("- ")],
+          "the header must not contain fact lines")
+    know.write_text(know.read_text(encoding="utf-8") + "- fact; way (verified 2026-01-01: x)\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check("fact; way" in know.read_text(encoding="utf-8"), "an existing knowledge.md was overwritten")
+
+
+@scenario("MG6", "a second upgrade run changes nothing")
+def migrate_rerun_no_change(t: T):
+    d = repo_040(t, files=USER_DATA)
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"first upgrade exit {code}: {out[-300:]}")
+    first = tree_snapshot(d)
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"second upgrade exit {code}: {out[-300:]}")
+    check(tree_snapshot(d) == first, "second run changed files: "
+          f"{sorted(set(tree_snapshot(d).items()) ^ set(first.items()))[:4]}")
+    check("remove " not in out, f"second run removed something: {out[-300:]}")
+
+
 # ================================================================ D bench harness (fake claude only)
 BENCH = KIT / "tools" / "bench" / "bench.py"
 FAKE = KIT / "tools" / "bench" / "fake_claude.py"

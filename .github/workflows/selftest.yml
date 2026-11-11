@@ -36,6 +36,9 @@ jobs:
         python: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the migration scenarios build a 0.4.0 install from the v0.4.0 tag
+          fetch-tags: true
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
