@@ -28,13 +28,11 @@ SK = KIT / "skills"
 SCRIPTS = {
     "pl": SK / "writing-plans/scripts/plan.py",
     "nt": SK / "keeping-notes/scripts/notes.py",
-    "gk": SK / "managing-git/scripts/gitkit.py",
+    "gk": KIT / "scripts/gitkit.py",
     "vf": SK / "verifying-changes/scripts/verify.py",
     "rmap": SK / "economizing-context/scripts/repomap.py",
     "run": SK / "economizing-context/scripts/run.py",
     "dbg": SK / "debugging-systematically/scripts/dbg.py",
-    "ex": SK / "tracking-experiments/scripts/exp.py",
-    "pk": SK / "crafting-prompts/scripts/promptkit.py",
     "validate": KIT / "tools/validate_skills.py",
     "install": KIT / "tools/install.py",
 }
@@ -137,7 +135,6 @@ Done when: `a.py` exits 0
 Out of scope: web
 
 ### Step 1: {VI}
-- Mode: solo
 - Files: a.py (new)
 - Contract: tạo a.py với hàm load()
 - Tests: test_load
@@ -224,8 +221,6 @@ def a4(t: T):
     git(d, "add", "-A")
     code, out = kit("gk", "scan", "--staged", cwd=d)
     check(code == 1 and "src/cfg.py" in out and "notes/" not in out, f"exit {code}: {out[:300]}")
-    code, out = kit("gk", "diff", "--staged", cwd=d)
-    check("kit-managed" in out and "src/cfg.py" in out, f"diff should list notes/ as kit-managed: {out[:300]}")
 
 
 def bench_module():
@@ -276,14 +271,14 @@ def a5e(t: T):
     scan_case(t, "a5e", 'API_KEY = "sk-your-key-here"', False)
 
 
-@scenario("B2", "gitkit suggest, snapshot and stashes no longer exist")
+@scenario("B2", "gitkit has only scan and lint-msg: the 0.4.0 subcommands are gone")
 def b2(t: T):
     d = t.repo("b2")
-    for sub in ("suggest", "snapshot", "stashes"):
+    for sub in ("diff", "branch-name", "preflight", "suggest", "snapshot", "stashes"):
         code, out = kit("gk", sub, cwd=d)
         check(code == 2 and "invalid choice" in out, f"{sub}: exit {code}: {out[:200]}")
     code, out = kit("gk", "--help", cwd=d)
-    check(all(w in out for w in ("diff", "scan", "lint-msg", "branch-name", "preflight")), f"help: {out[:300]}")
+    check("scan" in out and "lint-msg" in out and "preflight" not in out, f"help: {out[:300]}")
 
 
 # ================================================================ B1 zone
@@ -384,7 +379,7 @@ def b2b(t: T):
 # ================================================================ B3 decisions in plans, /grill
 def plan_with(decisions: str) -> str:
     return ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n"
-            f"Decisions: {decisions}\n\n### Step 1: Add a\n- Mode: solo\n- Files: a.py (new)\n"
+            f"Decisions: {decisions}\n\n### Step 1: Add a\n- Files: a.py (new)\n"
             "- Contract: create a.py\n- Tests: test_a\n- Out of scope: none\n- Verify: python a.py\n")
 
 OLD_PLAN = ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n\n"
@@ -436,16 +431,18 @@ def dc3(t: T):
     check(code == 2 and second in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("DC4", "install copies the grilling-designs skill and /grill command")
+@scenario("DC4", "grill is part of writing-plans: no grilling-designs skill, no /grill command, a decision-tree reference")
 def dc4(t: T):
     d = t.repo()
-    code, out = kit("install", str(d), "--with", "grill", cwd=t.base)
+    code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[:300]}")
-    check((d / ".agentkit/skills/grilling-designs/SKILL.md").is_file(), "skill not installed")
-    check((d / ".claude/commands/grill.md").is_file() and (d / ".claude/commands/task.md").is_file(),
-          "commands not installed")
-    text = (d / ".agentkit/skills/grilling-designs/SKILL.md").read_text(encoding="utf-8")
-    check("disable-model-invocation: true" in text, "frontmatter lost")
+    check(not (d / ".agentkit/skills/grilling-designs").exists(), "grilling-designs must not be installed")
+    check(not (d / ".claude/commands/grill.md").exists() and (d / ".claude/commands/task.md").is_file(),
+          "only /task is a command now")
+    tree = d / ".agentkit/skills/writing-plans/reference/decision-tree.md"
+    check(tree.is_file() and "nt decide" in tree.read_text(encoding="utf-8"), "decision-tree.md not installed")
+    skill = (d / ".agentkit/skills/writing-plans/SKILL.md").read_text(encoding="utf-8")
+    check(len(skill.splitlines()) <= 45 and "grill" not in skill.lower().replace("grill-me", ""), "SKILL.md too long or mentions /grill")
 
 
 # ================================================================ plan step format
@@ -457,23 +454,28 @@ def pl1(t: T):
     check(code == 2 and "old format" in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("PL2", "plan check: new-format step needs Mode, Contract, Tests and Out of scope")
+@scenario("PL2", "plan check: new-format step needs Contract, Tests and Out of scope (Mode is not required)")
 def pl2(t: T):
     d = t.repo()
     bare = "# Plan: demo\nDone when: x exits 0\n\n### Step 1: Add a\n- Files: a.py (new)\n"
     t.write(d, {"plan.md": bare})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 1, f"exit {code}: {out[:300]}")
-    for field in ("Mode", "Contract", "Tests", "Out of scope"):
+    for field in ("Contract", "Tests", "Out of scope"):
         check(f"missing '{field}:'" in out, f"{field} not reported: {out[:300]}")
+    check("missing 'Mode:'" not in out, f"Mode must not be required: {out[:300]}")
 
 
-@scenario("PL3", "plan check: Mode must be solo or pipeline; 'no tests' WARNs")
-def pl3(t: T):
+@scenario("PL3", "plan check: a Mode line only WARNs 'Mode is ignored'; 'no tests' WARNs")
+def pl_check_mode_warns(t: T):
     d = t.repo()
-    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Mode: solo", "Mode: duo")})
+    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
-    check(code == 1 and "Mode must be" in out, f"exit {code}: {out[:300]}")
+    check(code == 0 and "Mode" not in out, f"a plan without Mode is clean: exit {code}: {out[:300]}")
+    for mode in ("solo", "duo"):  # any value: nothing reads it
+        t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("- Files:", f"- Mode: {mode}\n- Files:")})
+        code, out = kit("pl", "check", "plan.md", cwd=d)
+        check(code == 2 and "Mode is ignored" in out and "BLOCK" not in out, f"Mode: {mode}: exit {code}: {out[:300]}")
     t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Tests: test_a", "Tests: none")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 2 and "no tests" in out, f"exit {code}: {out[:300]}")
@@ -688,7 +690,7 @@ def g5(t: T):
     check(code == 0, f"first push of main: {out[-300:]}")
     git(d, "switch", "-q", "-c", "feat/x")
     t.write(d, {
-        "notes/tasks/feat--x.plan.md": "# Plan: demo\nDone when: x\n\n### Step 1: edit a\n- Mode: solo\n- Files: a.py\n"
+        "notes/tasks/feat--x.plan.md": "# Plan: demo\nDone when: x\n\n### Step 1: edit a\n- Files: a.py\n"
                                        "- Contract: a stays\n- Tests: test_a\n- Out of scope: b.py\n",
         "notes/tasks/feat--x.md": "# Task: demo\n- branch: feat/x\n\n## Plan\n- [ ] 1. edit a\n",
         "a.py": "x = 2\n", "b.py": "y = 1\n"})
@@ -749,7 +751,7 @@ def b4c(t: T):
     check(code == 0, f"unrelated bug should not warn: exit {code}: {out[:200]}")
 
 
-@scenario("DB4", "dbg llm-case appends a valid case; promptkit check still passes; bad vars BLOCK")
+@scenario("DB4", "dbg llm-case appends a valid case; bad vars BLOCK")
 def b4d(t: T):
     spec = {"name": "qa", "target": "generic", "goal": "Answer the question from the documents.",
             "inputs": [{"name": "question", "description": "user question"}],
@@ -766,8 +768,6 @@ def b4d(t: T):
     got = json.loads((d / "prompts/qa.spec.json").read_text(encoding="utf-8"))
     check(got["cases"] == [{"vars": {"question": "How much is it?"},
                             "checks": [{"type": "not_contains", "value": "$"}], "source": bid}], f"cases: {got['cases']}")
-    code, out = kit("pk", "check", "prompts/qa.spec.json", cwd=d)
-    check(code == 0, f"promptkit check exit {code}: {out[:300]}")
 
 
 # ================================================================ ID branch-safe ids for append-only logs
@@ -790,13 +790,6 @@ def id1(t: T):
     t.write(d, {"plan.md": plan_with("D-001")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 2 and repl in out, f"plan cites superseded D-001: exit {code}: {out[:300]}")
-    runs = d / "experiments/runs.jsonl"
-    for name, old in (("a", "E-0001"), ("b", "E-0002")):
-        legacy(runs, new_id(kit("ex", "log", "--name", name, "--metric", "acc=0.5", cwd=d)[1], "E"), old)
-    code, out = kit("ex", "compare", "E-0001", "E-0002", cwd=d)
-    check(code == 0 and "E-0001" in out and "E-0002" in out, f"compare old ids: exit {code}: {out[:300]}")
-    code, out = kit("ex", "log", "--name", "c", "--metric", "acc=0.6", cwd=d)
-    check(new_id(out, "E") not in ("E-0001", "E-0002"), out[:200])
     legacy(d / "notes/debug.jsonl", new_id(kit("dbg", "open", "--layer", "code", "--symptom", "boom", cwd=d)[1], "B"),
            "B-001")
     code, out = kit("dbg", "close", "B-001", "--cause", "typo", cwd=d)
@@ -806,7 +799,7 @@ def id1(t: T):
 def two_branches(t: T, add) -> tuple[Path, str, str, str]:
     """Installed repo; branches a and b each call add(d, label) -> id, then both merge into main."""
     d = t.repo()
-    code, out = kit("install", str(d), "--with", "experiments", cwd=t.base)
+    code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[-300:]}")
     t.commit(d, "chore: install kit")
     ids = []
@@ -834,23 +827,10 @@ def id2(t: T):
     d, a, b, _ = two_branches(t, decide)
     kit("install", str(d), cwd=t.base)
     lines = (d / ".gitattributes").read_text(encoding="utf-8").splitlines()
-    for p in ("notes/decisions.md", "notes/debug.jsonl", "experiments/runs.jsonl"):
+    for p in ("notes/decisions.md", "notes/debug.jsonl", "FAILURES.md"):
         check(lines.count(f"{p} merge=union") == 1, f".gitattributes after 2 installs: {lines}")
     code, out = kit("nt", "show", cwd=d)
     check(code == 0 and a in out and b in out and "choice a" in out and "choice b" in out, f"show: {out[:300]}")
-
-
-@scenario("ID3", "two branches that each `ex log` merge cleanly; both runs listed with distinct ids")
-def id3(t: T):
-    def log(d: Path, b: str) -> str:
-        code, out = kit("ex", "log", "--name", f"run-{b}", "--metric", "acc=0.5", cwd=d)
-        check(code in (0, 2), f"ex log on {b}: {out[:200]}")
-        return new_id(out, "E")
-    d, a, b, _ = two_branches(t, log)
-    code, out = kit("ex", "list", cwd=d)
-    check(code == 0 and a in out and b in out, f"list: {out[:300]}")
-    code, out = kit("ex", "compare", a, b, cwd=d)
-    check(code == 0, f"compare merged runs: exit {code}: {out[:300]}")
 
 
 # ================================================================ B5 SessionStart hook
@@ -940,8 +920,6 @@ def b3p(t: T):
 
 @scenario("WT1", "commit flow in a `git worktree`: message at `git rev-parse --git-path AGENT_MSG`, lint-msg, commit -F")
 def wt1(t: T):
-    skill = (SK / "managing-git/SKILL.md").read_text(encoding="utf-8")
-    check("git rev-parse --git-path AGENT_MSG" in skill and ".git/AGENT_MSG" not in skill, "SKILL.md still hard-codes .git/")
     d = hooked_repo(t, "main")
     t.commit(d, "chore: install kit")
     wt = t.base / "wt"
@@ -1030,6 +1008,108 @@ def b3d(t: T):
     check(code == 2 and py.read_text(encoding="utf-8").count("agent-kit") == 0, f"non-sh hook: exit {code}: {out[-300:]}")
 
 
+# ================================================================ GH git hooks after the managing-git move
+OLD_GITKIT_PATH = ".agentkit/skills/managing-git/scripts/gitkit.py"
+
+
+@scenario("GH1", "--git-hooks rewrites a 0.4.0 block to .agentkit/scripts/gitkit.py: user lines kept, second run no change")
+def githooks_rewrite_new_path(t: T):
+    d = repo_040(t, "gh1", optional=False)
+    hook = d / ".git" / "hooks" / "pre-commit"
+    text = hook.read_text(encoding="utf-8")
+    check(OLD_GITKIT_PATH in text, "fixture hook should call the 0.4.0 path")
+    first, _, rest = text.partition("\n")
+    hook.write_bytes((first + "\necho first >> hook.log\n" + rest + "echo last >> hook.log\n").encode("utf-8"))
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    check(code == 0, f"exit {code}: {out[-400:]}")
+    new = hook.read_text(encoding="utf-8")
+    check(new.count(HOOK_MARK) == 1 and ".agentkit/scripts/gitkit.py" in new and "managing-git" not in new,
+          f"block not rewritten: {new[:400]}")
+    check("echo first >> hook.log" in new and new.rstrip().endswith("echo last >> hook.log"), "user lines lost")
+    check((d / ".agentkit/scripts/gitkit.py").is_file(), "gitkit.py not copied to .agentkit/scripts")
+    snap = {n: (d / ".git/hooks" / n).read_bytes() for n in ("pre-commit", "commit-msg")}
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    check(code == 0 and {n: (d / ".git/hooks" / n).read_bytes() for n in snap} == snap, "second run changed the hooks")
+    code, out = commit_try(d, "feat: add settings", {"src/cfg.py": f"API_KEY = \"{FAKE_KEY}\"\n"}, t)
+    check(code != 0 and "BLOCK" in out, f"key must be rejected by the rewritten hook: exit {code}: {out[:300]}")
+    git(d, "reset", "-q")
+    (d / "src" / "cfg.py").unlink()
+    code, out = commit_try(d, "bad message", {"a.py": "A = 1\n"}, t)
+    check(code != 0 and "ERROR" in out, f"bad message accepted: exit {code}: {out[:300]}")
+
+
+@scenario("GH2", "a duplicated kit block collapses into one on --git-hooks; the user's lines stay")
+def githooks_no_duplicate(t: T):
+    d = repo_040(t, "gh2", optional=False)
+    hook = d / ".git" / "hooks" / "commit-msg"
+    text = hook.read_text(encoding="utf-8")
+    first, _, rest = text.partition("\n")
+    hook.write_bytes((first + "\necho mine >> hook.log\n" + rest + rest).encode("utf-8"))
+    check(hook.read_text(encoding="utf-8").count(HOOK_MARK) == 2, "fixture should hold two blocks")
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)
+    new = hook.read_text(encoding="utf-8")
+    check(code == 0 and new.count(HOOK_MARK) == 1 and "echo mine >> hook.log" in new, f"exit {code}: {new[:300]}")
+
+
+@scenario("GH3", "0.4.0 hooks not yet rewritten fail every commit loudly ('run install.py again'), and the installer warns")
+def githooks_old_install_fails_loud(t: T):
+    d = repo_040(t, "gh3", optional=False)
+    code, out = kit("install", str(d), cwd=t.base)  # upgrade WITHOUT --git-hooks: the old path is gone
+    check(code == 2 and "--git-hooks" in out and "still calls the removed" in out, f"exit {code}: {out[-500:]}")
+    check(OLD_GITKIT_PATH in (d / ".git/hooks/pre-commit").read_text(encoding="utf-8"), "hook should be untouched")
+    code, out = commit_try(d, "feat: add a module", {"a.py": "A = 1\n"}, t)
+    check(code != 0 and "install.py again" in out, f"commit must be rejected with the hint: exit {code}: {out[:400]}")
+    code, out = kit("install", str(d), "--git-hooks", cwd=t.base)  # the fix the message asks for
+    check(code == 0, f"exit {code}: {out[-300:]}")
+    code, out = run(["git", "commit", "-q", "-m", "feat: add a module"], d)
+    check(code == 0, f"after install.py --git-hooks the commit must pass: exit {code}: {out[:300]}")
+
+
+@scenario("GH4", "a hook whose .agentkit/scripts/gitkit.py is missing rejects the commit and says to run install.py again")
+def githooks_missing_gitkit_fails_loud(t: T):
+    d = hooked_repo(t, "gh4")
+    (d / ".agentkit/scripts/gitkit.py").unlink()
+    code, out = commit_try(d, "feat: add a module", {"a.py": "A = 1\n"}, t)
+    check(code != 0 and "install.py again" in out, f"exit {code}: {out[:400]}")
+
+
+@scenario("GH5", "lint-msg accepts a body with an Assumptions: block")
+def lint_msg_accepts_assumptions(t: T):
+    d = t.repo("gh5")
+    msg = ("feat(kit): add the knowledge file\n\nThe installer creates notes/knowledge.md when it is missing.\n\n"
+           "Assumptions:\n- the file lives in the notes dir because nt brief reads it from there\n"
+           "- the header has no fact lines so the 20-line check counts only facts\n")
+    code, out = kit("gk", "lint-msg", "-m", msg, cwd=d)
+    check(code == 0 and "OK" in out, f"exit {code}: {out[:300]}")
+    code, out = kit("gk", "lint-msg", "-m", "added things\n\nAssumptions:\n- x\n", cwd=d)
+    check(code == 1, f"a bad header must still BLOCK: exit {code}: {out[:200]}")
+
+
+@scenario("GH6", "install enables the commit-commands plugin once, keeps other settings, prints the install command")
+def plugin_enabled_idempotent(t: T):
+    plugin = "commit-commands@claude-plugins-official"
+    d = t.repo("gh6")
+    t.write(d, {".claude/settings.local.json": json.dumps({"permissions": {"allow": ["Bash(ls)"]}})})
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and f"claude plugin install {plugin} --scope project" in out, f"exit {code}: {out[-500:]}")
+    settings = d / ".claude/settings.local.json"
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    check(data["enabledPlugins"] == {plugin: True} and data["permissions"] == {"allow": ["Bash(ls)"]}, f"{data}")
+    before = settings.read_bytes()
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and settings.read_bytes() == before, "second run changed the settings file")
+    check(".claude/settings.local.json" in (d / ".git/info/exclude").read_text(encoding="utf-8"), "local file not excluded")
+    # a person who switched it off keeps it off
+    data["enabledPlugins"][plugin] = False
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    kit("install", str(d), cwd=t.base)
+    check(json.loads(settings.read_text(encoding="utf-8"))["enabledPlugins"][plugin] is False, "a disabled plugin was re-enabled")
+    # --team writes the shared file
+    code, out = kit("install", str(d), "--team", cwd=t.base)
+    shared = json.loads((d / ".claude/settings.json").read_text(encoding="utf-8"))
+    check(code == 0 and shared["enabledPlugins"] == {plugin: True}, f"--team: exit {code}: {shared}")
+
+
 # ================================================================ B4 core vs optional skills
 def skills_in(d: Path) -> set:
     return {p.name for p in (d / ".agentkit" / "skills").iterdir() if (p / "SKILL.md").exists()}
@@ -1040,46 +1120,307 @@ def listed_in_agents(d: Path) -> set:
     return set(re.findall(r"([a-z-]+)/scripts/", (d / "AGENTS.md").read_text(encoding="utf-8")))
 
 
-CORE5 = {"writing-plans", "keeping-notes", "managing-git", "verifying-changes", "economizing-context"}
+ALL_NOW = {"writing-plans", "keeping-notes", "verifying-changes", "economizing-context",
+           "debugging-systematically"}
 
 
-@scenario("B4", "default install = 5 core skills; --with adds optional ones; AGENTS.md lists exactly the installed")
+@scenario("B4", "default install = every skill of the kit; AGENTS.md lists exactly the ones that have scripts")
 def b4(t: T):
     d = t.repo("core")
     code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[-300:]}")
-    check(skills_in(d) == CORE5, f"installed: {sorted(skills_in(d))}")
+    check(skills_in(d) == ALL_NOW, f"installed: {sorted(skills_in(d))}")
     claude_skills = {p.name for p in (d / ".claude" / "skills").iterdir()}
-    check(claude_skills == CORE5, f".claude/skills: {sorted(claude_skills)}")
+    check(claude_skills == ALL_NOW, f".claude/skills: {sorted(claude_skills)}")
     text = (d / "AGENTS.md").read_text(encoding="utf-8")
-    check(listed_in_agents(d) == CORE5, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
-    check("`dbg`" not in text and "`ex run" not in text and "/grill" not in text and "<!--" not in text.replace(
-        "<!-- Project-specific rules below this line -->", ""), "optional skill lines leaked into AGENTS.md")
-    check("/grill" not in (d / "CLAUDE.md").read_text(encoding="utf-8"), "CLAUDE.md mentions /grill")
-    check(not (d / ".claude/commands/grill.md").exists() and (d / ".claude/commands/task.md").is_file(), "commands wrong")
+    check(listed_in_agents(d) == ALL_NOW, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
+    check("<!--if" not in text and "`ex run" not in text, "conditional or removed-skill line leaked into AGENTS.md")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0 and skills_in(d) == ALL_NOW, f"re-run changed the set: {sorted(skills_in(d))}")
 
-    e = t.repo("opt")
-    code, out = kit("install", str(e), "--with", "experiments,prompts", cwd=t.base)
-    check(code == 0, f"install --with exit {code}: {out[-300:]}")
-    want = CORE5 | {"tracking-experiments", "crafting-prompts"}
-    check(skills_in(e) == want and len(want) == 7, f"installed: {sorted(skills_in(e))}")
-    check(listed_in_agents(e) == want, f"AGENTS.md lists {sorted(listed_in_agents(e))}")
-    check("`ex run" in (e / "AGENTS.md").read_text(encoding="utf-8"), "ex line missing")
 
-    # upgrading an existing install: a re-run without --with keeps optional skills; adding grill regenerates AGENTS.md
-    code, out = kit("install", str(e), cwd=t.base)
-    check(code == 0 and skills_in(e) == want, f"re-run changed the set: {sorted(skills_in(e))}")
-    code, out = kit("install", str(e), "--with", "grill,debug", cwd=t.base)
-    check(code == 0 and "update" in out and "AGENTS.md" in out, f"exit {code}: {out[-400:]}")
-    # grilling-designs has no script, so it has no short name; every other installed skill must be listed
-    check(len(skills_in(e)) == 9 and listed_in_agents(e) == skills_in(e) - {"grilling-designs"},
-          f"AGENTS.md lists {sorted(listed_in_agents(e))}")
-    check("/grill" in (e / "AGENTS.md").read_text(encoding="utf-8") and (e / ".claude/commands/grill.md").is_file(),
-          "grill not wired in")
+@scenario("B5", "--with was removed in 0.5.0: any value exits 1, names the CHANGELOG and writes nothing")
+def with_flag_removed_exits_1(t: T):
+    for val in ("grill,debug", "experiments", "bogus"):
+        f = t.repo(f"bad-{val[:3]}")
+        code, out = kit("install", str(f), "--with", val, cwd=t.base)
+        check(code == 1 and "removed in 0.5.0" in out and "CHANGELOG" in out, f"--with {val}: exit {code}: {out[-300:]}")
+        check(not (f / ".agentkit").exists(), "--with must not install anything")
 
-    f = t.repo("bad")
-    code, out = kit("install", str(f), "--with", "bogus", cwd=t.base)
-    check(code == 1 and "experiments" in out and not (f / ".agentkit").exists(), f"exit {code}: {out[-300:]}")
+
+# ================================================================ MG migration from a 0.4.0 install
+def old_kit(t: T, tag: str = "v0.4.0") -> Path:
+    """The kit as released at `tag`, read from git (CI checks out with fetch-depth 0 so the tag exists)."""
+    import io
+    import tarfile
+    r = subprocess.run(["git", "archive", "--format=tar", tag], cwd=KIT, capture_output=True)
+    check(r.returncode == 0, f"git archive {tag} failed (is the tag fetched?): {r.stderr.decode(errors='replace')[:200]}")
+    dst = t.base / "oldkit"
+    dst.mkdir(exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tf:
+        try:
+            tf.extractall(dst, filter="data")
+        except TypeError:  # Python without the extraction filters
+            tf.extractall(dst)
+    return dst
+
+
+def repo_040(t: T, name: str = "mig", optional: bool = True, files: dict | None = None, hooks: bool = True) -> Path:
+    """A repo installed by the real 0.4.0 installer: all optional skills unless optional=False, git hooks unless hooks=False."""
+    d = t.repo(name, files=files)
+    args = ["--with", "experiments,prompts,grill,debug"] if optional else []
+    code, out = run([sys.executable, old_kit(t) / "tools" / "install.py", d, *args, *(["--git-hooks"] if hooks else [])], t.base)
+    check(code == 0, f"0.4.0 install exit {code}: {out[-300:]}")
+    t.commit(d, "chore: install kit 0.4.0")
+    return d
+
+
+def tree_snapshot(d: Path) -> dict:
+    import hashlib
+    return {p.relative_to(d).as_posix(): hashlib.sha1(p.read_bytes()).hexdigest()
+            for p in sorted(d.rglob("*")) if p.is_file() and ".git" not in p.relative_to(d).parts}
+
+
+USER_DATA = {"experiments/runs.jsonl": '{"id": "E-1", "name": "dense"}\n',
+             "prompts/qa.spec.json": '{"name": "qa"}\n'}
+
+
+@scenario("MG1", "0.4.0 -> 0.5.0: unmodified removed skills are deleted, debugging stays installed, user data untouched")
+def migrate_040_removes_unmodified(t: T):
+    d = repo_040(t, files=USER_DATA, hooks=False)
+    before = {p: (d / p).read_bytes() for p in USER_DATA}
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"upgrade exit {code}: {out[-400:]}")
+    for gone in ("crafting-prompts", "tracking-experiments", "managing-git", "grilling-designs"):
+        shim = gone == "managing-git"  # a 0.4.0 git hook still points into it: only the loud shim stays
+        check(not (d / ".agentkit/skills" / gone / "SKILL.md").exists(), f"{gone} still in .agentkit/skills")
+        check((d / ".agentkit/skills" / gone).exists() == shim, f"{gone}: dir presence should be {shim}")
+        check(not (d / ".claude/skills" / gone).exists() and not (d / ".claude/skills" / gone).is_symlink(),
+              f"{gone} still in .claude/skills")
+        check(any(l.startswith("remove ") and f"skills{os.sep}{gone}" in l.replace("/", os.sep) for l in out.splitlines()),
+              f"no remove line for {gone}: {out[-400:]}")
+    check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
+    check(not (d / ".claude/commands/grill.md").exists(), "the unmodified /grill command should be removed")
+    for p, data in before.items():
+        check((d / p).read_bytes() == data, f"user data changed: {p}")
+
+
+@scenario("MG2", "0.4.0 -> 0.5.0: a modified removed skill is kept with a WARN, the unmodified one still goes")
+def migrate_040_keeps_modified(t: T):
+    d = repo_040(t, hooks=False)
+    md = d / ".agentkit/skills/tracking-experiments/SKILL.md"
+    md.write_text(md.read_text(encoding="utf-8") + "\nOur own rule: always pass --tag.\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 2 and "WARN keep" in out and "modified" in out, f"exit {code}: {out[-400:]}")
+    check(md.is_file() and "Our own rule" in md.read_text(encoding="utf-8"), "modified skill was changed or removed")
+    check(not (d / ".agentkit/skills/crafting-prompts").exists(), "unmodified sibling should be removed")
+
+
+@scenario("MG3", "0.4.0 -> 0.5.0: a removed skill the project's own rules still call is kept with a WARN")
+def migrate_040_keeps_in_use(t: T):
+    d = repo_040(t, hooks=False)
+    agents = d / "AGENTS.md"
+    agents.write_text(agents.read_text(encoding="utf-8").rstrip("\n") + "\n\n## Experiments\n"
+                      "- Runs go through `ex run ... -- <cmd>`, never bare.\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 2 and "still use" in out, f"exit {code}: {out[-400:]}")
+    check((d / ".agentkit/skills/tracking-experiments/SKILL.md").is_file(), "in-use skill was removed")
+    check("`ex run ... -- <cmd>`" in agents.read_text(encoding="utf-8"), "project rules were rewritten")
+    check(not (d / ".agentkit/skills/crafting-prompts").exists(), "unused sibling should be removed")
+
+
+@scenario("MG4", "migration of a command and of skills the kit stops shipping: grill.md, managing-git, grilling-designs")
+def migrate_grill_cmd(t: T):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kit_install_mg4", KIT / "tools" / "install.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    d = repo_040(t)
+    cmds = d / ".claude/commands"
+    check((cmds / "grill.md").is_file(), "fixture has no grill.md")
+    # the kit of the future ships none of these; run only the migration step
+    code = mod.migrate_removed(d, {"writing-plans", "keeping-notes", "verifying-changes", "economizing-context",
+                                   "debugging-systematically"}, {"task.md"})
+    check(code == 0, f"migrate exit {code}")
+    check(not (cmds / "grill.md").exists(), "unmodified grill.md should be removed")
+    for gone in ("grilling-designs", "managing-git", "crafting-prompts", "tracking-experiments"):
+        check(not (d / ".agentkit/skills" / gone / "SKILL.md").exists(), f"{gone} should be removed")
+    check((d / ".agentkit/skills/writing-plans/SKILL.md").is_file(), "a kept skill was touched")
+    # a user-edited command is kept
+    e = repo_040(t, "mig2")
+    g = e / ".claude/commands/grill.md"
+    g.write_text(g.read_text(encoding="utf-8") + "\nteam tweak\n", encoding="utf-8")
+    code = mod.migrate_removed(e, set(), {"task.md"})
+    check(code == 2 and "team tweak" in g.read_text(encoding="utf-8"), f"modified grill.md: exit {code}")
+
+
+@scenario("MG5", "0.4.0 core-only install gains debugging-systematically and notes/knowledge.md on upgrade")
+def migrate_installs_debugging_and_knowledge(t: T):
+    d = repo_040(t, "core", optional=False, hooks=False)
+    check(not (d / ".agentkit/skills/debugging-systematically").exists(), "fixture should not have debugging")
+    check(not (d / "notes/knowledge.md").exists(), "fixture should not have knowledge.md")
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"upgrade exit {code}: {out[-400:]}")
+    check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
+    know = d / "notes/knowledge.md"
+    check(know.is_file() and "verified YYYY-MM-DD" in know.read_text(encoding="utf-8"), "knowledge.md missing or no format line")
+    check(not [l for l in know.read_text(encoding="utf-8").splitlines() if l.startswith("- ")],
+          "the header must not contain fact lines")
+    know.write_text(know.read_text(encoding="utf-8") + "- fact; way (verified 2026-01-01: x)\n", encoding="utf-8")
+    code, out = kit("install", str(d), cwd=t.base)
+    check("fact; way" in know.read_text(encoding="utf-8"), "an existing knowledge.md was overwritten")
+
+
+@scenario("MG6", "a second upgrade run changes nothing")
+def migrate_rerun_no_change(t: T):
+    d = repo_040(t, files=USER_DATA, hooks=False)
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"first upgrade exit {code}: {out[-300:]}")
+    first = tree_snapshot(d)
+    code, out = kit("install", str(d), cwd=t.base)
+    check(code == 0, f"second upgrade exit {code}: {out[-300:]}")
+    check(tree_snapshot(d) == first, "second run changed files: "
+          f"{sorted(set(tree_snapshot(d).items()) ^ set(first.items()))[:4]}")
+    check("remove " not in out, f"second run removed something: {out[-300:]}")
+
+
+# ================================================================ KN notes/knowledge.md in nt brief
+KNOW_HEAD = "# Knowledge\n\nFacts about this repo.\nLine format: `- <fact>; <right way> (verified YYYY-MM-DD: <evidence>)`.\n\n"
+
+
+def knowledge_repo(t: T, facts: int, name: str = "kn") -> Path:
+    d = t.repo(name)
+    kit("nt", "init", cwd=d)
+    body = "".join(f"- fact {i}; way {i} (verified 2026-11-11: cmd {i})\n" for i in range(1, facts + 1))
+    t.write(d, {"notes/knowledge.md": KNOW_HEAD + body})
+    return d
+
+
+@scenario("KN1", "nt brief prints the facts of notes/knowledge.md after the task part, without the header")
+def brief_shows_knowledge(t: T):
+    d = knowledge_repo(t, 3)
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0, f"exit {code}: {out[:300]}")
+    check("KNOWLEDGE 3" in out and "- fact 1; way 1" in out and "- fact 3; way 3" in out, f"facts missing: {out[:500]}")
+    check("Line format" not in out and "WARN" not in out, f"header or a WARN leaked: {out[:500]}")
+    check(out.index("TASK") < out.index("KNOWLEDGE"), "knowledge must come after the task part")
+    d2 = t.repo("kn-none")
+    kit("nt", "init", cwd=d2)
+    code, out = kit("nt", "brief", cwd=d2)
+    check(code == 0 and "KNOWLEDGE" not in out, f"no file, no section: {out[:300]}")
+    t.write(d2, {"notes/knowledge.md": KNOW_HEAD})
+    code, out = kit("nt", "brief", cwd=d2)
+    check(code == 0 and "KNOWLEDGE" not in out, f"header only, no section: {out[:300]}")
+
+
+@scenario("KN2", "nt brief WARNs 'consider scoped format' above 20 facts (still exit 0, so a SessionStart hook never fails)")
+def brief_warns_knowledge_over_20(t: T):
+    d = knowledge_repo(t, 20)
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0 and "KNOWLEDGE 20" in out and "WARN" not in out, f"20 facts are fine: exit {code}: {out[-300:]}")
+    d = knowledge_repo(t, 21, "kn21")
+    code, out = kit("nt", "brief", cwd=d)
+    check(code == 0 and "WARN" in out and "consider scoped format" in out and "21 facts" in out, f"exit {code}: {out[-400:]}")
+    t.write(d, {".agentkit.json": json.dumps({"notes": {"max_knowledge_facts": 30}})})
+    code, out = kit("nt", "brief", cwd=d)
+    check("WARN" not in out, f"the limit is configurable: {out[-300:]}")
+
+
+@scenario("KN3", "the real repo's seed knowledge.md follows the line format and the installer's header has no fact lines")
+def knowledge_seed_format(t: T):
+    line = re.compile(r"^- .+; .+ \(verified \d{4}-\d{2}-\d{2}: .+\)$")
+    facts = [l for l in (KIT / "notes/knowledge.md").read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
+    check(len(facts) == 5, f"seed facts: {len(facts)}")
+    bad = [l[:80] for l in facts if not line.match(l)]
+    check(not bad, f"lines off the format: {bad}")
+
+
+# ================================================================ PF plan.py field vs the 0.4.0 plan-step.sh
+PARITY_PLAN = """# Plan: parity
+Constraints: none
+Done when: x
+
+### Step 1: First step
+- Mode: solo
+- Files: src/a.py, `src/b.py` (new), src/a.py
+  tests/t.py (NEW)
+- Contract: parse(s) -> int
+  invariant: positive
+- Tests: test_a, test_b
+- Out of scope: none
+- Verify: pytest -q
+
+### Step 2: Second: with a colon
+- Files: c.py (mới)
+- Contract: one
+- Contract: two replaces one
+  and continues
+- Tests: t
+- Out of scope: x
+
+## Notes
+Files: ignored.py
+
+### Step 3: Third
+- Files:
+- Tests: only
+
+  second line
+
+### Step 4: Tiếng Việt
+- Files: d.py, e.py (new)
+- Contract: tạo d.py
+- Tests: test_d
+- Out of scope: web
+
+## 5. Old style
+Files: old.py
+Do: change it
+Verify: t
+Done: ok
+"""
+PARITY_NOTE = ("# Task: parity\n- branch: main\n\n## Plan\n- [x] 1. First\n- [ ] 2. Second\n- [ ] 3. Third\n"
+               "- [ ] 4. VN\n- [ ] 5. Old\n\n## Log\n- [ ] 9. not a plan item\n")
+
+
+def capture(cmd: list, cwd: Path) -> tuple[int, str, str]:
+    p = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
+                       env=child_env(), timeout=300, stdin=subprocess.DEVNULL)
+    return p.returncode, p.stdout, p.stderr
+
+
+@scenario("PF1", "plan.py field behind plan-step.sh gives the 0.4.0 awk's stdout, stderr and exit code, case by case")
+def plan_field_parity(t: T):
+    need_jq()  # the 0.4.0 script reads its config with jq
+    bash = bash_exe()  # Git bash on Windows: System32 bash is the WSL launcher and would make both sides print its error
+    old = old_kit(t) / "scripts" / "plan-step.sh"
+    new = KIT / "scripts" / "plan-step.sh"
+    d = t.repo("pf", files={"notes/tasks/main.plan.md": PARITY_PLAN, "notes/tasks/main.md": PARITY_NOTE})
+    t.write(d, {"crlf.plan.md": PARITY_PLAN.replace("\n", "\r\n")})
+    check(capture([bash, old, "title", "--step", "1", "--plan", "notes/tasks/main.plan.md"], d) == (0, "First step" + chr(10), ""),
+          "the 0.4.0 script does not run here, so a comparison would prove nothing")
+    fields = ("title", "mode", "files", "contract", "tests", "out-of-scope", "verify", "do", "done", "colour")
+    arg_sets = ([], ["--cumulative"], ["--step", "2"], ["--step", "2", "--cumulative"], ["--step", "4", "--cumulative"],
+                ["--step", "9"], ["--step", "x"], ["--step", "5"],
+                ["--plan", "crlf.plan.md", "--step", "2"], ["--plan", "missing.md", "--step", "1"],
+                ["--note", "missing-note.md"], ["--step"], ["--bogus"])
+    n = 0
+    for fld in fields:
+        for args in arg_sets:
+            want, got = capture([bash, old, fld, *args], d), capture([bash, new, fld, *args], d)
+            check(want == got, f"plan-step.sh {fld} {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
+            n += 1
+    for args in ([], ["files", "--note", "notes/tasks/main.md"]):
+        want, got = capture([bash, old, *args], d), capture([bash, new, *args], d)
+        check(want == got, f"plan-step.sh {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
+    git(d, "switch", "-q", "--detach")  # detached HEAD without --plan/--note
+    want, got = capture([bash, old, "files"], d), capture([bash, new, "files"], d)
+    check(want == got and want[0] == 1, f"detached HEAD\n  0.4.0: {want!r}\n  now:   {got!r}")
+    check(n == len(fields) * len(arg_sets), "case count")
+    # `--step 0 --cumulative` depended on the platform's seq in 0.4.0 (GNU: empty output, BSD: error); now always the error
+    code, out, err = capture([bash, new, "title", "--step", "0", "--cumulative", "--plan", "notes/tasks/main.plan.md",
+                          "--note", "notes/tasks/main.md"], d)
+    check(code == 1 and out == "" and "step 0 not found in the plan" in err, f"step 0 cumulative: {code} {out!r} {err!r}")
 
 
 # ================================================================ D bench harness (fake claude only)
@@ -1212,12 +1553,17 @@ def v2(t: T):
 
 
 # ================================================================ V validate the real kit
-@scenario("V", "validate_skills on the real kit: exit 0, all 9 skills ok")
+@scenario("V", "validate_skills on the real kit: exit 0, every skill ok")
 def v(t: T):
     code, out = kit("validate", cwd=t.base)
     oks = [l for l in out.splitlines() if l.startswith("ok ")]
-    check(code == 0 and len(oks) == 9 and "FAIL" not in out and "ERROR" not in out,
+    n_skills = len(list((KIT / "skills").glob("*/SKILL.md")))
+    check(code == 0 and len(oks) == n_skills and "FAIL" not in out and "ERROR" not in out,
           f"exit {code}, {len(oks)} ok lines: {out[:400]}")
+    m = re.search(r"skill descriptions in total: (\d+) tok now(?: · (\d+) tok at v0\.4\.0)?", out)
+    check(m is not None, f"no description-token total line: {out[-300:]}")
+    check(int(m[1]) == sum(int(x) for x in re.findall(r"desc≈(\d+) tok", out)), "total is not the sum of the skills")
+    check(m[2] is None or int(m[1]) < int(m[2]), f"0.5.0 must cost fewer description tokens than 0.4.0: {m[0]}")
 
 
 # ================================================================ H every script answers --help

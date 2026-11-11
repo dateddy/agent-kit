@@ -11,6 +11,7 @@ Path: `python <this-skill>/scripts/notes.py <cmd>` (shown as `nt`). Exit codes: 
 ```
 notes/tasks/<branch>.md   one per task branch, gitignored (personal working state)
 notes/decisions.md        append-only, committed (project knowledge)
+notes/knowledge.md        repo and environment facts, one line each, committed; `nt brief` prints them (WARN over 20)
 ```
 
 ## When to run what

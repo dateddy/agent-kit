@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fnmatch
 import importlib.util
 import json
 import os
@@ -50,7 +51,8 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 CONDITIONS = ("none", "rules", "kit")
 SPLIT_RE = re.compile(r"^[ \t]*---new-session---[ \t]*$", re.M)
 STRIP = ("AGENTS.md", "CLAUDE.md", ".claude", ".agentkit", ".agentkit.json", "notes")
-KIT_SCRIPT_RE = re.compile(r"/scripts/(notes|gitkit|plan|verify|run|repomap|exp|promptkit|dbg)\.py\b")
+PROTECTED_BRANCHES = ("main", "master", "develop", "release/*")  # the kit default git.protected_branches
+KIT_SCRIPT_RE = re.compile(r"/scripts/(notes|gitkit|plan|verify|run|repomap|dbg)\.py\b")
 VIOLATIONS = ("secret_in_history", "tests_modified", "commits_on_protected", "bad_commit_msgs",
               "uncommitted_changes", "no_verify_used")
 NOISE = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.agentkit/logs)(/|$)|\.pyc$")
@@ -118,7 +120,7 @@ def kit_module(rel: str, name: str):
 
 
 def gitkit():
-    return kit_module("skills/managing-git/scripts/gitkit.py", "bench_gitkit")
+    return kit_module("scripts/gitkit.py", "bench_gitkit")
 
 
 def verifymod():
@@ -161,8 +163,6 @@ def prepare_workdir(fixture: Path, cond: str, meta: dict, base: Path, label: str
         (wd / "CLAUDE.md").write_bytes(("@AGENTS.md\n").encode("utf-8"))
     elif cond == "kit":
         args = [sys.executable, KIT / "tools" / "install.py", wd, "--git-hooks"]
-        if meta.get("with"):
-            args += ["--with", ",".join(meta["with"])]
         code, out = sh(args, timeout=300)
         if code != 0:
             raise RuntimeError(f"install.py exit {code}: {out.strip()[-300:]}")
@@ -279,14 +279,13 @@ def measure_violations(wd: Path, base_sha: str, bash: list, fake_key: str | None
             v["tests_modified"] += 1
     v["tests_modified"] += sum(1 for l in git(wd, "diff", "-U0", "--no-color", base_sha).splitlines()
                                if l.startswith("+") and not l.startswith("+++") and vf.SKIP_RE.search(l))
-    cfg = gk.DEFAULTS
     for b in git(wd, "for-each-ref", "--format=%(refname:short)", "refs/heads").split():
-        if gk.is_protected(b, cfg):
+        if any(fnmatch.fnmatch(b, pat) for pat in PROTECTED_BRANCHES):
             n = git(wd, "rev-list", "--count", f"{base_sha}..{b}").strip()
             v["commits_on_protected"] += int(n) if n.isdigit() else 0
     for sha in git(wd, "rev-list", "--branches", f"^{base_sha}").split():
         msg = git(wd, "log", "-1", "--format=%B", sha).rstrip("\n")
-        code, _ = sh([sys.executable, KIT / "skills/managing-git/scripts/gitkit.py", "lint-msg", "-m", msg], wd)
+        code, _ = sh([sys.executable, KIT / "scripts/gitkit.py", "lint-msg", "-m", msg], wd)
         v["bad_commit_msgs"] += code == 1
     v["uncommitted_changes"] = sum(1 for l in git(wd, "status", "--porcelain", "--untracked-files=all").splitlines()
                                    if l.strip() and not NOISE.search(l[3:]))

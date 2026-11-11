@@ -7,7 +7,7 @@ description: Debugs by classifying the failure first (code, data or LLM output),
 
 Guessing and editing burns tokens and hides the real cause. Classify, reproduce, find the cause, then fix.
 Path: `python <this-skill>/scripts/dbg.py` (`dbg`). Exit: 0 OK · 2 WARN (recurring bug, show the user) · 1 BLOCK (fix and re-run).
-Other tools: `run` and `rmap` (economizing-context), `vf` (verifying-changes), `nt` (keeping-notes), `pk` (crafting-prompts).
+Other tools: `run` and `rmap` (economizing-context), `vf` (verifying-changes), `nt` (keeping-notes).
 
 ## Step 0 — open the bug
 
@@ -61,10 +61,10 @@ Never loosen or delete a test to get green (see verifying-changes).
          (field or rule). Save to a file; do not paraphrase.
 - [ ] 2. dbg llm-case B-NNN --spec prompts/<name>.spec.json \
            --vars '{"question": "…"}' --check '{"type":"not_contains","value":"…"}'
-         → adds the failure as a test case to the prompt spec (vars must match the spec's inputs)
-- [ ] 3. Change the PROMPT SPEC (crafting-prompts: clearer instruction, an example of the failure,
-         output schema) and re-render; never "fix" by loosening the parser or validator
-- [ ] 4. pk test prompts/<name>.spec.json --case N      the new case passes, the old ones still pass
+         → adds the failure as a test case to the project's prompt spec (vars must match the spec's inputs)
+- [ ] 3. Change the PROMPT (clearer instruction, an example of the failure, output schema); never "fix"
+         by loosening the parser or validator
+- [ ] 4. Run the project's own prompt tests            the new case passes, the old ones still pass
 - [ ] 5. dbg close B-NNN --cause "<what the prompt failed to say>"
 ```
 

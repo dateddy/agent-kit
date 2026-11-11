@@ -58,3 +58,67 @@ Why: Keeps false-positive BLOCKs at 0 as rules grow.
 ## D-baf8 · 2026-11-11 · guards-perm-deny-syntax · feat/guard-fs
 permissions.deny from fs.deny_read: Read(~/x/**) and relative Read(**/.env) as is, absolute /x as //x, C:/x as //c/x; fs.allow_read becomes Read(!pattern) (relative patterns only). Docs (code.claude.com/docs/en/permissions): a Read deny also applies best-effort to Grep/Glob and Edit/Write, deny beats allow, ! carves out of earlier same-file relative rules only, relative rules match under the project dir only.
 Why: Read official docs instead of guessing; //-anchored rules cannot take a ! exception, so .env.example stays readable only with relative patterns.
+
+## D-8437 · 2026-11-11 · slim-a · refactor/slim-down
+Remove crafting-prompts and tracking-experiments entirely.
+Why: Unused optional skills add installer and doc weight.
+
+## D-6480 · 2026-11-11 · slim-b · refactor/slim-down
+Git workflow goes to plugin commit-commands@claude-plugins-official; kit keeps only gitkit scan (pre-commit) and lint-msg (commit-msg) as git hooks.
+Why: Plugin covers commit/push/PR; hooks are agent-independent.
+
+## D-4c92 · 2026-11-11 · slim-c · refactor/slim-down
+Keep writing-plans: plan mode is the interface, the plan file is the contract.
+Why: Plan file is machine-checked by pl check.
+
+## D-ccad · 2026-11-11 · slim-d · refactor/slim-down
+Kit stays a skill set installed by install.py, not packaged as a plugin.
+Why: Keeps AGENTS.md and git hooks usable by other agents.
+
+## D-be72 · 2026-11-11 · slim-e · refactor/slim-down
+grilling-designs merged into writing-plans Frame: grill always runs, asks only when gaps remain.
+Why: One path instead of a manual optional step.
+
+## D-1dee · 2026-11-11 · slim-f · refactor/slim-down
+debugging-systematically becomes a core skill; AGENTS rule 7 unconditional.
+Why: Failure handling should not depend on --with.
+
+## D-2d4d · 2026-11-11 · slim-g · refactor/slim-down
+Lite path stops only for must-ask points; assumptions are shown, work continues, and they go in the commit body under Assumptions:.
+Why: Avoid blocking on reversible defaults.
+
+## D-1aa6 · 2026-11-11 · slim-h · refactor/slim-down
+notes/knowledge.md (committed) holds repo/env facts; agent writes and reports 1 line.
+Why: Facts found after >=3 tries should not be rediscovered.
+
+## D-7867 · 2026-11-11 · slim-q1 · refactor/slim-down
+README positioning: Claude Code fully supported; other agents get AGENTS.md plus git hooks only.
+Why: Matches what is actually enforced.
+
+## D-1931 · 2026-11-11 · slim-q2 · refactor/slim-down
+Installer removes deleted skills/commands if hash equals a shipped version; modified ones warn and are kept; experiments/ and prompts/ never touched.
+Why: Safe migration of downstream repos.
+
+## D-5c12 · 2026-11-11 · slim-q3 · refactor/slim-down
+Drop --with and <!--if:skill-->; --with <any> exits 1 'removed in 0.5.0, see CHANGELOG'.
+Why: No optional skills remain.
+
+## D-defc · 2026-11-11 · slim-q4 · refactor/slim-down
+guard allows git branch -D when git branch -vv shows upstream [gone]; never on protected branches.
+Why: /clean_gone needs it; gone upstream means merged or deleted remotely.
+
+## D-217d · 2026-11-11 · slim-q5 · refactor/slim-down
+Plan field Mode is ignored; pl check only WARNs 'Mode is ignored'.
+Why: Field is dead.
+
+## D-0196 · 2026-11-11 · slim-i · refactor/slim-down
+Removed skill whose short name (ex, pk) still appears in the project section of AGENTS.md/CLAUDE.md counts as in use: warn and keep.
+Why: cascade-lad still uses ex run; silent removal would break it.
+
+## D-b795 · 2026-11-11 · slim-j · refactor/slim-down
+enabledPlugins commit-commands@claude-plugins-official goes in the same settings file as hooks (settings.local.json, --team: settings.json); installer prints 'claude plugin install ... --scope project'. Source: code.claude.com/docs/en/plugins, /plugins/loading, /settings.
+Why: Docs: project-enabled plugins still need a per-machine install.
+
+## D-cbd4 · 2026-11-11 · slim-k · refactor/slim-down
+Tag v0.4.0 on the 1b merge cd4c178.
+Why: Migration hashes of shipped files need a reproducible reference.

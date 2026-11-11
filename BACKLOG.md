@@ -3,6 +3,24 @@
 Planned work, newest release first. An item moves to `CHANGELOG.md` when it ships; an item that
 comes from a corrected agent mistake also gets a `FAILURES.md` entry naming the control.
 
+## 2b (next release)
+
+### Verify chains: verify may stand alone, be joined with `&&`, or be redirected
+- Gap: the 1b rule blocks `vf | tail` and `vf |& tee`, but `vf || true` and `vf; echo done` also hide a failing verdict.
+- Plan: a verify-chain rule in `guard.py`: verify only alone, after `&&`, or with a redirect; block `vf || …`, `vf; …`, `vf | …`.
+- Tests: a table in `test_guard_py.py`; `fp_sweep` stays at BLOCK=0 ASK=0.
+
+### `GIT_CONFIG_*` and `--config-env` for `core.hooksPath`
+- Gap: `guard.py` blocks `git -c core.hooksPath=…` and `git config … core.hooksPath`, but `GIT_CONFIG_COUNT/KEY_n/VALUE_n` and `--config-env=core.hooksPath=VAR` redirect the hooks too.
+- Plan: block both forms in `guard_hooks_bypass` (env prefixes are already tracked).
+
+### Log every guard ask/block decision
+- Gap: nobody can measure false-positive asks and blocks in real use.
+- Plan: `guard.py` appends each ask/block decision (rule, command, branch, time) to `.agentkit/logs/guard.jsonl` (gitignored), with a `guards.log` switch.
+- Tests: a decision is logged once; allow decisions are not; the file is created under `.agentkit/logs/`.
+
+Also for 2b (from the slim-down plan): the tiered verify engine and hooks, an `rmap` cache, `REPO_MAP`; a gate in `pl check` for `Done when` and decision ids (step 3); bench tasks T6 and T7.
+
 ## v0.4
 
 ### Merge message pattern in guard-git and pre-push

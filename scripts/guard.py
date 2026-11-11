@@ -578,7 +578,8 @@ class Judge:
             self.rule_push(b, args)
         # 1b rules run last: where an older rule already asks, its message is the one shown
         self.record(guard_hooks_bypass(sub, args))
-        self.record(guard_destructive(self.cfg, sub, args))
+        where = os.path.join(self.cwd, git_dir) if self.cwd and git_dir else (git_dir or self.cwd or None)
+        self.record(guard_destructive(self.cfg, sub, args, where))
         if sub == "push":
             self.record(guard_force_push(self.cfg, b, args))
 
@@ -752,14 +753,37 @@ def _destructive(cfg: Config, what: str, why: str) -> Decision:
     return Decision("ask", f"Destructive command '{what}': {why}. Approve only if the user asked for it.")
 
 
-def guard_destructive(cfg: Config, sub: str, args: list[str]) -> Decision:
-    """Git commands that throw work away. Which ones: see the table in README (Guards)."""
+_GONE_RE = re.compile(r"^[*+ ]\s+(\S+)\s+\S+\s+\[[^\]]*: gone\]")
+
+
+def branches_gone(names: list[str], cwd: Optional[str] = None) -> bool:
+    """True when every name is a local branch whose upstream is gone, per `git branch -vv` (`[origin/x: gone]`).
+
+    That is what /clean_gone deletes: the remote branch was merged and removed. False for no names, an unknown
+    branch, or when git fails, so every doubt keeps the question.
+    """
+    rc, out = git(["-c", "color.branch=never", "branch", "-vv"], cwd)
+    if rc != 0:
+        return False
+    gone = {m.group(1) for m in map(_GONE_RE.match, out.splitlines()) if m}
+    return bool(names) and all(n in gone for n in names)
+
+
+def guard_destructive(cfg: Config, sub: str, args: list[str], cwd: Optional[str] = None) -> Decision:
+    """Git commands that throw work away. Which ones: see the table in README (Guards).
+
+    `git branch -D` of local branches whose upstream is gone is allowed (never a protected one, never under
+    guards.destructive=block); `cwd` is where `git branch -vv` is asked.
+    """
     flags, operands, after = parse_opts(args)
     fl = set(flags)
     why = ""
     if sub == "reset" and fl & {"--hard", "--merge", "--keep"}:
         why = "discards changes in the working tree"
     elif sub == "branch" and ("-D" in fl or (fl & {"-d", "--delete"} and fl & {"-f", "--force"})):
+        if (destructive_policy(cfg) != "block" and not fl & {"-r", "--remotes"}
+                and not any(cfg.is_protected(n) for n in operands) and branches_gone(operands, cwd)):
+            return ALLOW
         why = "deletes a branch even if it is not merged"
     elif sub == "clean" and fl & {"-f", "--force"} and not fl & {"-n", "--dry-run"}:
         why = "deletes untracked files"

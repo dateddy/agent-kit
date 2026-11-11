@@ -1,88 +1,38 @@
 ---
 name: writing-plans
-description: Frames a task (goal, constraints, done-when, out-of-scope) and writes plans a cheaper model can execute without design decisions: every step names files, change, verify command and done-criterion, checked by scripts/plan.py. Use when the user types /task, says "start a task", "new task", "bắt đầu task", asks for a plan, starts a non-trivial feature or fix, or works in plan mode.
+description: Frames a task (loads context, finds what is still unclear, asks only about the gaps, records decisions) and writes plans a cheaper model can execute without design decisions, checked by scripts/plan.py. Use when the user types /task, says "start a task", "new task", "bắt đầu task", asks for a plan or a design interview, starts a non-trivial feature or fix, or works in plan mode.
 ---
 
 # Writing plans
 
-The plan is the prompt for the executor. If a step forces the executor to search the repo or choose a design, the plan is not finished.
-Path: `python <this-skill>/scripts/plan.py` (`pl`). Exit codes: 0 OK · 2 WARN · 1 BLOCK.
-Input is `/task <free text>` (Claude Code), a message starting with `task:`, or any request for a non-trivial change.
+The plan is the executor's prompt: a step that forces a search or a design choice is unfinished. Plan mode is the interface, the plan file the contract. `pl` = `python <this-skill>/scripts/plan.py` (exit 0 OK · 2 WARN · 1 BLOCK). Input: `/task <text>`, `task: <text>`, or any non-trivial change.
 
-## Frame (before planning)
+## Frame (always runs; it asks only what is still open)
+1. **Load context first, in proportion.** Small task: `nt brief` (it includes knowledge.md) plus grep. Large task: also live decisions, `rmap --zone` on the files involved, `git log --oneline -10`. Never ask what a lookup answers.
+2. **Sort every unclear point.** Can be looked up → look it up. Has an easy-to-reverse default → list it under `Assumptions:`. Anything else → must ask.
+3. **Small branch (every task, lite included):** goal if vague; scope edges (tests, docs, help text); inputs and edge cases (empty, negative, Unicode incl. Vietnamese diacritics); callers of the code that changes; `Done when` (infer it when a clear observable check exists, else ask).
+4. **Architecture branch, only if the task touches:** a new dependency · schema, storage or migration · a public API or signature · a new module or boundary · concurrency · auth, secrets or permissions · infra, deploy or CI. Walk `reference/decision-tree.md`, parents before children.
+5. **Ask in rounds of at most 5 questions** (any number of rounds). Each: one thing, a recommendation, a one-line reason, what you checked. Every architecture answer → `nt decide` at once.
 
-1. `nt brief`. If an open task exists on this branch, ask: continue it, or start a new one?
-2. Fill the frame from the user's text. Do not invent values:
+## Lite path (≤2 files and no architecture item)
+State the frame and assumptions in 1-3 lines, then work. Stop only for a must-ask point; otherwise show the assumptions and continue. Put them in the commit body under `Assumptions:`. A third file or an architecture item → full plan.
 
+## Plan (plan mode is read-only: output the plan in chat; `pl template`)
 ```
-Goal:          <outcome, one line>              (required)
-Constraints:   <must not change / required tech>
-Done when:     <observable check for the whole task>
-Out of scope:  <deferred>
-```
-
-3. Ask only for missing fields, in **one** message, **at most 3 questions**, ranked by how much the answer changes the plan. Always ask for `Done when` if absent. Each question:
-   - asks exactly **one** thing (never "A or B? and C?"), and
-   - ends with a default: `Recommended: X — reply 'ok' to accept`.
-
-   Bad: "Which search method, and CLI or web?" Good: "1. Search method? Recommended: BM25 — reply 'ok'. 2. Interface? Recommended: CLI — reply 'ok'."
-   If the user answers "skip", leave the field empty.
-4. If the grilling-designs skill is installed and the task adds or changes a public interface or schema, touches 3 or more modules (`rmap --zone`), or left a design choice open: suggest `/grill` in one line. **Never auto-run it.** If the user declines, continue.
-5. If not in plan mode, suggest it: plan mode with the planning model, execution with a cheaper one (Claude Code: `/model opusplan`, `Shift+Tab`).
-
-Do not create a branch, edit files or write notes before the plan is accepted.
-
-## Lite path (no plan file, no task note)
-
-Use it when the change touches **≤2 files** and needs **no design decision**. State the frame in one or two lines, make the change, then the normal rules still apply: `vf` exits 0 after the last edit, and commit through managing-git. If you discover a third file or an open choice, stop and switch to the full plan.
-
-## Planning (plan mode is read-only — explore, then output the plan in chat)
-
-1. Explore with `repomap`/grep and line ranges (economizing-context).
-2. Resolve remaining open questions with the user **now**, under the same question rules. The executor must not decide architecture.
-3. Output the plan in exactly this format (see `pl template`):
-
-```
-# Plan: <one-line outcome>
+# Plan: <outcome>
 Constraints: <must not change / required tech>
 Done when: <observable result for the whole task>
 Out of scope: <deferred>
-Decisions: D-012, D-013        (optional: ids from a /grill session or nt decide)
-
-### Step 1: <step title>
-- Mode: solo | pipeline
+Decisions: D-3a7f, D-91c2        (optional; ids from `nt decide`)
+### Step 1: <title>
 - Files: src/x.py, tests/test_x.py (new)
 - Contract: <signatures, input/output, invariants, edge cases>
 - Tests: test_x_ok, test_x_empty
 - Out of scope: <what must not be touched>
 - Verify: python -m pytest tests/test_x.py -q        (optional)
 ```
+2-8 steps, each leaves the code working. Real paths (`(new)` for files to create). `Tests` are concrete names, written before the code. `Files` lists every file the step touches, tests included: `verify.sh` flags others. `Mode:` is ignored. `pl check` BLOCKs an unknown `Decisions` id, WARNs a superseded one.
 
-`Decisions:` lists decision ids the plan relies on. `pl check` BLOCKs an id missing from `notes/decisions.md` and WARNs on a superseded one (it names the replacement). Do not re-ask the user about a listed decision.
-
-Step rules: 2–8 steps; each step leaves the code working and verifiable; real paths only (`(new)` for files to create); `Mode`, `Files`, `Contract`, `Tests` and `Out of scope` are required (one line each, extra lines indented).
-- `Tests` names the tests that define done. **Write them before the code**; the step is finished when exactly those pass. Name them concretely (`test_drops_null_rows`), never "add tests".
-- `Files` is a contract: `verify.sh` fails any changed file outside the `Files` of steps 1..active unless a decision in `notes/decisions.md` logs why. List every file the step touches, tests included.
-- The old `## 1.` / Do / Done format still parses; `pl check` WARNs on it. Write new plans in the format above.
-
-## Where the active step lives
-
-The accepted plan is `pl path` (`notes/tasks/<branch>.plan.md`). The active step is the first unchecked item of the task note's `## Plan` checklist (`nt task --check N` ticks them); with every item ticked it is the last step. Scripts read it with `scripts/plan-step.sh <field>` (`files`, `tests`, `mode`, `contract`, `out-of-scope`, `verify`, `title`; `--cumulative` for steps 1..active). There is no second marker to maintain: tick the step with `nt` as you finish it.
-
-## After the user accepts (executor, write mode)
-
-```
-- [ ] 1. Create the task branch (managing-git: gk branch-name …)
-- [ ] 2. Save the accepted plan verbatim to the path from `pl path`
-- [ ] 3. pl check   → fix BLOCKs (wrong paths, placeholders); report WARNs to the user
-- [ ] 4. pl apply   → loads steps into the task note
-- [ ] 5. For each step N:  pl step N → write its Tests first (they fail) → implement → run its Verify (or vf)
-                         → nt task --check N --done "…" --next "…" → commit
-```
-
-Read only `pl step N` for the current step — not the whole plan again.
-
-## Changing the plan mid-task
-
-Small fix (a path, a detail): edit the plan file, `pl check`, continue.
-Direction change: stop, tell the user what changed and why, update the plan, `pl check`, `pl apply` (replaces steps, logs the old progress).
+## After the user accepts
+`git switch -c feat/short-name` → save the plan to `pl path` → `pl check` (fix BLOCKs, show WARNs) → `pl apply`. Per step: `pl step N` (read only that) → tests first → implement → `vf` → `nt task --check N --done "…" --next "…"` → commit. The active step is the first unchecked item of the task note's `## Plan`; scripts read it with `scripts/plan-step.sh <field>` (`--cumulative`: steps 1..active).
+Plan changes: a small fix → edit the file, `pl check`. A new direction → stop, tell the user why, update the plan, `pl check`, `pl apply`.

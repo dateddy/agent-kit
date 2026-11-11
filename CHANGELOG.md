@@ -5,6 +5,32 @@ Links to `README.md#...` point at the section of the README that documents the f
 
 ## Unreleased
 
+Version 0.5.0: the kit gets smaller. Two optional skills and the git skill are gone, grilling moves inside `writing-plans`, `debugging-systematically` becomes core, and `notes/knowledge.md` is new. The verify engine is unchanged (next release). Skill descriptions that are always loaded: 888 -> 469 tokens (`validate_skills.py` prints both); `README.md` 857 -> 480 lines.
+
+**Removed**
+- `crafting-prompts` and `tracking-experiments` (skills, short names `pk` and `ex`, the `prompts` and `experiments` config blocks, their README sections and tests). Your own `experiments/` and `prompts/` data is never touched.
+- `managing-git`. The git workflow is the `commit-commands@claude-plugins-official` plugin (`/commit`, `/commit-push-pr`, `/clean_gone`). `gitkit.py` keeps only `scan --staged` (pre-commit) and `lint-msg` (commit-msg), now at `scripts/gitkit.py` and installed to `.agentkit/scripts/gitkit.py`. `diff`, `branch-name`, `preflight` and the `git.branch_pattern`, `git.branch_types`, `git.diff_ignore` keys are gone; `git.protected_branches` and `git.protected_commit` stay (the guards read them).
+- `grilling-designs` and the `/grill` command: the interview is now part of the `writing-plans` Frame and always runs.
+- The `--with` flag (exits 1, "removed in 0.5.0") and the `<!--if:skill-->` conditionals in `AGENTS.md` and `CLAUDE.md`.
+- `Mode:` in plan steps is no longer required; `pl check` only WARNs "Mode is ignored".
+
+**Added**
+- `writing-plans` Frame: loads context in proportion to the task, sorts unclear points (look up / assume / must ask), a small branch for every task, an architecture branch for listed areas (`reference/decision-tree.md`), rounds of at most 5 questions, `nt decide` at once. Lite path: stop only for must-ask points; assumptions go in the commit body under `Assumptions:` (`lint-msg` accepts the block). `SKILL.md` is 38 lines.
+- `plan.py field NAME [--cumulative] [--step N]`: the parser behind `scripts/plan-step.sh`, which is now a wrapper (no `jq`). Output, stderr and exit codes match the 0.4.0 script on 140 compared cases (selftest PF1).
+- `notes/knowledge.md` (created by the installer, header only): repo and environment facts, one line each; `nt brief` prints them and WARNs above `notes.max_knowledge_facts` (20); `AGENTS.md` says when to add a line.
+- Guard: `git branch -D` is allowed when every operand is a local branch whose upstream `git branch -vv` shows as gone (never a protected branch, never `-r`, not under `guards.destructive=block`).
+- Installer: enables the plugin in the settings file next to the hooks (`enabledPlugins`; `--team` for the shared file) and prints `claude plugin install commit-commands@claude-plugins-official --scope project`. `--team` no longer requires `--guards`.
+- `tools/gen_shipped_hashes.py` and `tools/shipped_hashes.json` (what the installer compares removed skills against); `validate_skills.py` prints the description-token total now and at `v0.4.0`.
+- `debugging-systematically` is core (AGENTS.md rule 6 is unconditional). `dbg.py` is unchanged.
+
+**Migration (0.4.0 -> 0.5.0)**: pull the kit and run `install.py` again; add `--git-hooks` if you use the git hooks.
+- Removed skills and `grill.md` are deleted when every file matches a shipped version (CRLF-insensitive). An edited copy, or one whose short name (`ex`, `pk`, `gk`) or skill name your own rules in `AGENTS.md` still use, is kept with a WARN and the installer exits 2.
+- Git hooks: a 0.4.0 hook calls `.agentkit/skills/managing-git/scripts/gitkit.py`. `install.py --git-hooks` rewrites the kit's block to `.agentkit/scripts/gitkit.py` in place (one block, your lines kept). Until then the removed skill leaves a small shim at the old path, so the hook fails every commit with "run install.py again" instead of skipping the check, and the installer WARNs. A hook whose `gitkit.py` is missing fails the same way. If you switch to a branch that predates `.agentkit/scripts/gitkit.py`, run `--git-hooks` again or `--uninstall-git-hooks`.
+- `notes/knowledge.md` is created if missing. `--with …` in scripts or bench `meta.json` files must be dropped. `scan` no longer skips `experiments/runs.jsonl` and `prompts/runs/`.
+- Plans keep working; a `Mode:` line now WARNs. A downstream `AGENTS.md` that still says `ex run` in its project section keeps working: the experiments skill stays until you remove it.
+
+## v0.4.0
+
 Behaviour change, hence `VERSION` 0.4.0: the guards block and ask in more places. A repo that relied on the old behaviour can set `guards.destructive` and `fs.outside_repo_write` to `allow`, or `fs.deny_read` to `[]` ([rules](README.md#guard-rules)).
 
 **Added (guards)**
