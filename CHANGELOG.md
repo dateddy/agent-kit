@@ -5,7 +5,22 @@ Links to `README.md#...` point at the section of the README that documents the f
 
 ## Unreleased
 
-No behaviour change.
+Behaviour change, hence `VERSION` 0.4.0: the guards block and ask in more places. A repo that relied on the old behaviour can set `guards.destructive` and `fs.outside_repo_write` to `allow`, or `fs.deny_read` to `[]` ([rules](README.md#guard-rules)).
+
+**Added (guards)**
+- `guard.py bash` rules: **BLOCK** `--no-verify` and `commit -n`, `git -c core.hooksPath=…`, `git config … core.hooksPath`, force push (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, `+refspec`) to a protected branch, and `verify.py`/`vf`/`verify.sh` piped (`|`, `|&`) into another command. **Ask** (`guards.destructive`: ask | block | allow) on `reset --hard|--merge|--keep`, `branch -D`, `clean -f`, `stash drop|clear`, `checkout -- <path>`, `restore` without `--staged`, `push --delete`, `filter-branch`, `filter-repo`, `update-ref -d`, `reflog expire`, `gc --prune=now` and a force push to an unprotected branch.
+- Writes outside the repo: `guard.py edit` / `scripts/guard-fs.sh` (new `PreToolUse` hook for `Edit|Write|MultiEdit|NotebookEdit`) and the same check in `guard.py bash` for `rm`, `rmdir`, `mv`, `cp`, `ln`, `touch`, `mkdir`, `chmod`, `chown`, `truncate`, `tee`, `dd of=`, `install`, `sed -i`, `perl -i` and the redirects `>`, `>>`, `2>`, `&>`. Paths are resolved (`~`, `$HOME`, `..`, symlinks even for new files, drive letters, `/c/…`, the hook's `cwd`, literal `cd`); a worktree of the same repo counts as the repo. Settings: `fs.outside_repo_write`, `fs.allow_write`. An unresolved variable in the target of `rm`/`mv`/`truncate`/`dd`/`sed -i`/`perl -i`/`>` asks.
+- `fs.deny_read` / `fs.allow_read`: a Bash word that names a protected file (`cat ~/.ssh/id_rsa`) is blocked; `install.py --guards` adds matching `Read(...)` rules to `permissions.deny` (merged, idempotent). Claude Code applies a Read deny rule to Grep and Glob best effort; see the README for the syntax limits.
+- `AGENTKIT_HEADLESS=1`: every ask becomes a block.
+- `guard.py`: `lex()` with operator and redirect kinds (`2>&1` is no longer split on `&`), `seg_ops()`.
+- `scripts/py.sh`: the single interpreter finder; `guard-git.sh`, `guard-fs.sh` and the git hooks written by `install.py` use it, so the hooks no longer pick the Microsoft Store `python3` stub.
+- `tools/fp_sweep.py`: runs every shell command of the README, templates and skills through the guard (CI step; must report BLOCK=0), and `--perf`.
+- Tests: `test_guard_py.py` tables for every rule and for path resolution, selftest G7, wrapper and hook-block tests.
+
+**Changed (guards)**
+- `test_guard_git.sh`: two expectations moved from ask to BLOCK (`git push origin +main` and `git push --force origin main` from a feature branch).
+- `install.py --guards` copies `py.sh` and `guard-fs.sh`; re-running it on an older install adds the new hook once. `templates/AGENTS.md` says the destructive-command rule is enforced and asks for the absolute path before a write outside the repo.
+- `scripts/pre-push`: the unused local-ref field is read into `_` (the SC2034 `disable` is gone).
 
 **Added**
 - A `lint` CI job (Ubuntu): `shellcheck --severity=warning` on `scripts/*.sh`, `scripts/pre-push` and `scripts/tests/*.sh`, and `ruff check tools skills`. The workflow now declares `permissions: contents: read`.

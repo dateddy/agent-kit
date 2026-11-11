@@ -34,8 +34,7 @@ first_parent_range() {
 }
 
 bad=0 pushed=0
-# shellcheck disable=SC2034  # read -r needs a name for the local-ref field; only lsha and rref are used
-while read -r lref lsha rref rsha; do
+while read -r _ lsha rref rsha; do
   [ -n "${lsha:-}" ] || continue
   is_zero "$lsha" && continue  # deleting a ref
   pushed=1

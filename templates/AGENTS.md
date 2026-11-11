@@ -25,7 +25,8 @@ Short names used below (run with `python`; paths relative to `.agentkit/skills/`
 ## Scripts decide, you write
 - Exit codes: 0 OK · 2 WARN → show the user and wait for yes · 1 BLOCK → fix and re-run. Never bypass a BLOCK.
 - Never use `--no-verify` (or any other way around a git hook). A hook BLOCK is fixed, not bypassed.
-- Destructive or irreversible commands (reset --hard, force push, deleting branches/files, dropping stashes): quote the exact command and wait for an explicit yes.
+- Destructive or irreversible commands (reset --hard, force push, deleting branches/files, dropping stashes): quote the exact command and wait for an explicit yes. With the guards installed (`install.py --guards`) `guard-git.sh` enforces this: it asks the user, and blocks a force push to a protected branch.
+- Writing, editing or deleting files outside the repo: state the absolute path and wait for the user's yes.
 
 ## Token discipline
 - Locate before reading: `rmap`, search (rg/grep), `rmap --symbols`, then read the needed line range.
