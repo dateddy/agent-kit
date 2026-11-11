@@ -3,7 +3,8 @@
 
 Checks: frontmatter name/description limits, name == folder, body length, relative links
 exist and stay one level deep, scripts answer --help, no short name that is a common shell command
-(rm, mv, cp, ls, cat …; `run` is fine). Prints a token estimate per skill.
+(rm, mv, cp, ls, cat …; `run` is fine). Prints a token estimate per skill and the total of all skill
+descriptions (always loaded) now and at the v0.4.0 release tag, so a change shows what it costs every session.
 Exit 1 if any ERROR.  Usage: python tools/validate_skills.py [skills_dir]
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ SHELL_CMDS = {"rm", "mv", "cp", "ls", "cat", "cd", "mkdir", "rmdir", "touch", "c
 # where a short name is defined: "(`x`)", "`x` = skill", "`x` skill/scripts/file.py"
 DEFINE_RE = re.compile(r"\(`(\w+)`\)|`(\w+)`\s*=|`(\w+)`\s+[\w-]+/scripts/")
 TOK = 4                 # rough chars per token for English markdown
+BASELINE_TAG = "v0.4.0"  # the release the 0.5.0 slim-down is measured against
 
 
 def frontmatter(text: str) -> tuple[dict, str]:
@@ -39,6 +41,23 @@ def frontmatter(text: str) -> tuple[dict, str]:
             k, v = line.split(":", 1)
             meta[k.strip()] = v.strip()
     return meta, m[2]
+
+
+def baseline_desc_tokens(kit: Path, tag: str = BASELINE_TAG) -> int | None:
+    """Description tokens of every skill at `tag` (read from git), or None when the tag or git is missing."""
+    def git(*args: str) -> str | None:
+        r = subprocess.run(["git", "-C", str(kit), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return r.stdout if r.returncode == 0 else None
+    listing = git("ls-tree", "-r", "--name-only", tag, "skills")
+    if listing is None:
+        return None
+    total = 0
+    for path in listing.splitlines():
+        if path.count("/") == 2 and path.endswith("/SKILL.md"):
+            text = git("show", f"{tag}:{path}")
+            if text is not None:
+                total += len(frontmatter(text.replace("\r\n", "\n"))[0].get("description", "")) // TOK
+    return total
 
 
 def shadowed_names(text: str) -> list[str]:
@@ -105,7 +124,7 @@ def main() -> int:
     ap.add_argument("skills_dir", nargs="?", help="default: <kit>/skills")
     a = ap.parse_args()
     root = Path(a.skills_dir) if a.skills_dir else Path(__file__).resolve().parent.parent / "skills"
-    bad = 0
+    bad = now = 0
     templates = root.parent / "templates"
     for md in sorted(templates.rglob("*.md")) if templates.is_dir() else []:
         for w in shadowed_names(md.read_text(encoding="utf-8")):
@@ -120,6 +139,10 @@ def main() -> int:
         for w in warns:
             print("     WARN: ", w)
         bad += bool(errs)
+        now += int(re.search(r"desc≈(\d+) tok", est)[1]) if not errs and re.search(r"desc≈(\d+) tok", est) else 0
+    if not a.skills_dir:
+        before = baseline_desc_tokens(root.parent)
+        print(f"skill descriptions in total: {now} tok now" + (f" · {before} tok at {BASELINE_TAG}" if before is not None else f" (tag {BASELINE_TAG} not found: no baseline)"))
     return 1 if bad else 0
 
 

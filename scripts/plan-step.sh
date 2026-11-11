@@ -43,4 +43,5 @@ args=(field "$field")
 [ "$cumulative" = 0 ] || args+=(--cumulative)
 [ -z "$plan" ] || args+=(--plan "$plan")
 [ -z "$note" ] || args+=(--note "$note")
+# shellcheck disable=SC2154  # ak_py and ak_py_args are set by ak_find_py in py.sh
 exec "$ak_py" ${ak_py_args:+"$ak_py_args"} "$plan_py" "${args[@]}"

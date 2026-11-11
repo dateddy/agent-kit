@@ -1551,6 +1551,10 @@ def v(t: T):
     n_skills = len(list((KIT / "skills").glob("*/SKILL.md")))
     check(code == 0 and len(oks) == n_skills and "FAIL" not in out and "ERROR" not in out,
           f"exit {code}, {len(oks)} ok lines: {out[:400]}")
+    m = re.search(r"skill descriptions in total: (\d+) tok now(?: · (\d+) tok at v0\.4\.0)?", out)
+    check(m is not None, f"no description-token total line: {out[-300:]}")
+    check(int(m[1]) == sum(int(x) for x in re.findall(r"desc≈(\d+) tok", out)), "total is not the sum of the skills")
+    check(m[2] is None or int(m[1]) < int(m[2]), f"0.5.0 must cost fewer description tokens than 0.4.0: {m[0]}")
 
 
 # ================================================================ H every script answers --help

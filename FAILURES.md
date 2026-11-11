@@ -15,7 +15,7 @@ Entry format:
 ## 2026-11-07 · Fast-forward merge into main
 - What happened: in a downstream repo (LAD) the agent ran `git merge --ff-only` to bring a stage branch into `main`. The repo convention is a `--no-ff` merge commit with message `feat(<scope>): merge Stage N, …`. The agent never looked at the existing history first.
 - Root cause: the convention lived only in history, not in any rule, and nothing checked the merge command or the pushed range.
-- Control: `scripts/guard-git.sh` (PreToolUse) blocks `--ff-only`, `--squash` and plain merges into protected branches and prints `git log --first-parent --merges -5 <branch> --oneline`; `scripts/pre-push` rejects non-merge first-parent commits pushed to protected branches; the installer offers `git config merge.ff false`; managing-git has a mandatory pre-merge history check.
+- Control: `scripts/guard-git.sh` (PreToolUse) blocks `--ff-only`, `--squash` and plain merges into protected branches and prints `git log --first-parent --merges -5 <branch> --oneline`; `scripts/pre-push` rejects non-merge first-parent commits pushed to protected branches; the installer offers `git config merge.ff false`; the pre-merge history check (`git log --first-parent --merges -5 <target>`) is in the Git section of `templates/AGENTS.md` and in the guard's block message (managing-git, which carried it before 0.5.0, is gone).
 
 ## 2026-11-07 · Code drifted from the plan; transforms shipped untested
 - What happened: review of the same downstream repo found many deviations from the plan and data transformations with no tests or weak ones.

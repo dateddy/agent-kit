@@ -1,14 +1,14 @@
 # agent-kit
 
-A shared skill set for software and AI projects worked on with coding agents (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, …).
+A shared skill set for software and AI projects worked on with coding agents. **Claude Code is fully supported** (slash commands, SessionStart and guard hooks, plugin settings). **Other agents** (Codex, Cursor, Gemini CLI, Copilot CLI, …) get `AGENTS.md` plus the git hooks, and the scripts when they can run a terminal command.
 
 It is built around three goals:
 
 - **Spend fewer tokens.** The agent reads maps, outlines and summaries instead of whole files and full logs.
 - **Engineering over judgment.** Anything that has a rule (commit format, branch policy, secrets, plan completeness, test results) is decided by a Python script, not by the model.
-- **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, debugging.
+- **Automate the repetitive parts.** Starting tasks, planning, verifying, debugging, remembering what was decided.
 
-All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#13-guards-scripts-that-always-run-v030) (`scripts/`) are bash wrappers around one Python script (`guard.py`): the `PreToolUse` guards need `bash` and Python 3.9+, `verify.sh`, `pre-push` and the installer also need `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
+All skill scripts are Python 3.9+ standard library only. The optional [guards](#13-guards-scripts-that-always-run-v030) (`scripts/`) are bash wrappers around one Python script (`guard.py`): the `PreToolUse` guards need `bash` and Python, `verify.sh`, `pre-push` and the installer's guard step also need `git` and `jq`; `ruff`, `pytest`, `pytest-cov` and `diff-cover` are used only when present and configured.
 
 ---
 
@@ -18,164 +18,139 @@ All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAM
 2. [Install](#2-install)
 3. [A complete task, start to finish](#3-a-complete-task-start-to-finish)
 4. [Conventions you will see everywhere](#4-conventions-you-will-see-everywhere)
-5. [Skills](#5-skills)
-   - Core: [writing-plans](#writing-plans) (Frame, lite path) · [keeping-notes](#keeping-notes) · [managing-git](#managing-git) · [verifying-changes](#verifying-changes) · [economizing-context](#economizing-context)
-   - Also core: [grilling-designs](#grilling-designs-grill) · [debugging-systematically](#debugging-systematically)
+5. [Skills](#5-skills): [writing-plans](#writing-plans) · [keeping-notes](#keeping-notes) · [verifying-changes](#verifying-changes) · [debugging-systematically](#debugging-systematically) · [economizing-context](#economizing-context)
 6. [Side questions without polluting the task context](#6-side-questions-without-polluting-the-task-context)
 7. [Configuration reference](#7-configuration-reference)
 8. [Using other agents](#8-using-other-agents)
 9. [Troubleshooting](#9-troubleshooting)
 10. [Adding your own skill](#10-adding-your-own-skill)
-11. [Git hooks](#11-git-hooks)
+11. [Git: the plugin and two git hooks](#11-git-hooks)
 12. [Benchmark: does the kit help?](#12-benchmark-does-the-kit-help)
-13. [Guards: scripts that always run (v0.3.0)](#13-guards-scripts-that-always-run-v030)
+13. [Guards: scripts that always run](#13-guards-scripts-that-always-run-v030)
 
-Release history: [CHANGELOG.md](CHANGELOG.md).
+Release history and the 0.4 → 0.5 migration: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
 ## 1. How it works
 
-A **skill** is a folder with a `SKILL.md` (instructions for the agent) and optional `scripts/` and `reference/` files.
+A **skill** is a folder with a `SKILL.md` (instructions for the agent) and optional `scripts/` and `reference/` files. Every skill is core: the installer copies all of them.
 
 ```
 agent-kit/
 ├── skills/
-│   ├── grilling-designs/      (optional) /grill design interview before planning, decisions recorded
-│   ├── writing-plans/         /task: frame the request, then executor-ready plans, validated by plan.py
-│   ├── keeping-notes/         task state per branch + decision log (notes.py)
-│   ├── managing-git/          commit/branch/merge/rebase/push with checks (gitkit.py)
+│   ├── writing-plans/         /task: Frame (context, gaps, decisions), lite path, executor-ready plans (plan.py)
+│   ├── keeping-notes/         task state per branch, decision log, knowledge.md (notes.py)
 │   ├── verifying-changes/     one PASS/FAIL verdict from lint/typecheck/test (verify.py)
-│   ├── debugging-systematically/  (optional) code / data / llm debugging + bug journal (dbg.py)
-│   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
-├── scripts/                   guards (bash + python; verify.sh and pre-push also git + jq): guard.py, guard-git.sh, guard-fs.sh, py.sh,
-│                              verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh,
-│                              test-kit.sh + tests/
-├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, commands/grill.md, claude-hooks.json
-├── tools/                     install.py, validate_skills.py, selftest.py, bench/ (benchmark harness)
-├── .github/workflows/         selftest.yml: 3 OSes x Python 3.9/3.13
+│   ├── debugging-systematically/  code / data / llm debugging + bug journal (dbg.py)
+│   └── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
+├── scripts/                   gitkit.py (the two git hooks) and the guards: guard.py, guard-git.sh, guard-fs.sh, py.sh,
+│                              verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh, test-kit.sh + tests/
+├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, claude-hooks.json
+├── tools/                     install.py, validate_skills.py, selftest.py, fp_sweep.py, gen_shipped_hashes.py, bench/
 ├── .agentkit.example.json     default configuration
 ├── FAILURES.md                log of corrected agent mistakes and the control that now prevents each
-├── BACKLOG.md                 planned work for the next release (v0.4)
-└── VERSION                    0.3.2
+├── BACKLOG.md                 planned work for the next release
+└── VERSION                    0.5.0
 ```
 
 Token cost is layered (progressive disclosure):
 
 | Layer | When it is in context | Cost |
 |---|---|---|
-| `name` + `description` of each skill | Always | ~80–115 tokens per skill, ~465 for the five core skills |
-| `SKILL.md` body | Only when the task matches | ~250–900 tokens |
+| `name` + `description` of each skill | Always | ~85–100 tokens per skill, ~470 for the five (`validate_skills.py` prints the total and the v0.4.0 baseline) |
+| `SKILL.md` body | Only when the task matches | ~250–1000 tokens |
 | `reference/*.md` | Only when that detail is needed | varies |
 | `scripts/*.py` | Never; they are run, and only their output enters context | output only |
 
-`AGENTS.md` (always loaded, ~45 lines) holds the cross-cutting rules: question vs task mode, the task lifecycle, exit-code handling and token discipline.
+`AGENTS.md` (always loaded, ~45 lines) holds the cross-cutting rules: question vs task mode, the task lifecycle, git, knowledge, exit-code handling and token discipline.
 
 ## 2. Install
 
 ```bash
 git clone <this repo> agent-kit
-python agent-kit/tools/install.py path/to/your-project                       # all skills
-python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus enforcement by git hooks
+python agent-kit/tools/install.py path/to/your-project                       # all skills, AGENTS.md, /task, plugin setting
+python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus pre-commit and commit-msg git hooks
 python agent-kit/tools/install.py path/to/your-project --guards              # plus the guards (needs bash, python, jq)
 ```
 
-**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. (The `PreToolUse` guards themselves, `guard-git.sh` and `guard-fs.sh`, run on Python and need no `jq`; `verify.sh`, `pre-push` and `plan-step.sh` do.) See [Guards](#13-guards-scripts-that-always-run-v030).
-
-**Core and optional skills.** The default install is small on purpose: every installed skill costs its description in every session.
-
-| Set | Skills | How to get them |
-|---|---|---|
-| Core (always) | `writing-plans`, `keeping-notes`, `managing-git`, `verifying-changes`, `economizing-context` | default |
-
-`AGENTS.md` and `CLAUDE.md` are generated from what is installed: the short-name lines (`nt`, `gk`, …) and the rules for a skill appear only when that skill is installed. Re-running the installer keeps and updates optional skills already present and regenerates the part of `AGENTS.md` above the `Project-specific rules` marker (your own rules below it are never touched).
+**Prerequisites:** Python 3.9+ and git. `--guards` also needs `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. See [Guards](#13-guards-scripts-that-always-run-v030).
 
 | Flag | Effect |
 |---|---|
-| `--git-hooks` | Install `pre-commit` (`gitkit scan --staged`) and `commit-msg` (`gitkit lint-msg`) git hooks; see [Git hooks](#11-git-hooks) |
-| `--uninstall-git-hooks` | Remove only the blocks the kit added to those hooks |
+| `--git-hooks` | Install `pre-commit` (`gitkit.py scan --staged`) and `commit-msg` (`gitkit.py lint-msg`), copying `gitkit.py` to `.agentkit/scripts/`; re-running rewrites the kit's block in place; see [Git](#11-git-hooks) |
+| `--uninstall-git-hooks` | Remove only the blocks the kit added to the git hooks |
 | `--hooks` | Claude Code SessionStart hook that runs `notes.py brief` (below) |
-| `--guards` [`--team`] | The bash guards, their Claude Code hooks and a `pre-push` git hook; see [Guards](#13-guards-scripts-that-always-run-v030). Hooks go to the uncommitted `.claude/settings.local.json`; `--team` writes the shared `.claude/settings.json` instead |
+| `--guards` | The bash guards, their Claude Code hooks (`.claude/settings.local.json`) and a `pre-push` git hook; see [Guards](#13-guards-scripts-that-always-run-v030) |
+| `--team` | Write the Claude Code settings (the plugin, and with `--guards` the hooks) to the shared `.claude/settings.json` instead of the uncommitted `.claude/settings.local.json` |
 | `--force` | Overwrite existing `.claude/skills/<name>` entries that are not links |
-| `--user` | Skills only, into `~/.claude/skills` (all skills) |
+| `--user` | Skills only, into `~/.claude/skills` |
+| `--with …` | **Removed in 0.5.0** (exit 1): every skill is core now |
 
 What it does (safe to re-run; it never overwrites your files):
 
 | Path in your project | Purpose |
 |---|---|
-| `.agentkit/skills/<skill>/` | Canonical copy of the installed skills (agent-neutral; `AGENTS.md` points here) |
+| `.agentkit/skills/<skill>/` | Canonical copy of the skills (agent-neutral; `AGENTS.md` points here) |
 | `.claude/skills/<skill>` | Symlink to the above so Claude Code discovers the skills (copied if symlinks are unavailable) |
-| `.claude/commands/task.md`, `grill.md` | The `/task` and `/grill` commands for Claude Code |
-| `AGENTS.md` | Rules for every agent, generated for the installed skills (created if missing; warns you to merge if you already have one without the project marker) |
-| `CLAUDE.md` | `@AGENTS.md` plus Claude Code extras (prepends `@AGENTS.md` to an existing file) |
+| `.claude/commands/task.md` | The `/task` command for Claude Code |
+| `.claude/settings.local.json` (`settings.json` with `--team`) | `enabledPlugins` for `commit-commands@claude-plugins-official`; the installer prints `claude plugin install commit-commands@claude-plugins-official --scope project`, which each person runs once |
+| `AGENTS.md`, `CLAUDE.md` | Rules for every agent (created if missing; the part above the `Project-specific rules` marker is regenerated, yours is never touched); `CLAUDE.md` is `@AGENTS.md` plus Claude Code extras |
 | `.agentkit.json` | Configuration (created if missing) |
-| `notes/decisions.md`, `.gitignore` rule for `notes/tasks/` | Notes layout |
+| `notes/decisions.md`, `notes/knowledge.md`, `.gitignore` rule for `notes/tasks/` | Notes layout; `knowledge.md` starts as a header |
 
-Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json` and `notes/decisions.md`. Logs (`.agentkit/logs/`) ignore themselves.
+Commit `.agentkit/skills`, `.claude/`, `AGENTS.md`, `CLAUDE.md`, `.agentkit.json`, `notes/decisions.md` and `notes/knowledge.md`. Logs (`.agentkit/logs/`) ignore themselves.
 
-To update the kit later, pull it and run `install.py` again. An old `starting-tasks` skill (merged into `writing-plans` before 0.3, see [CHANGELOG.md](CHANGELOG.md)) is removed, and an old `/task` command is rewritten to point at `writing-plans`.
+**Upgrading from 0.4.0:** pull the kit and run `install.py` again (add `--git-hooks` if you use them). Skills and the `/grill` command the kit no longer ships (`crafting-prompts`, `tracking-experiments`, `grilling-designs`, `managing-git`, `grill.md`) are deleted when every file still matches what the kit shipped; an edited copy, or one your own rules in `AGENTS.md` still call (`ex`, `pk`, `gk`), is kept with a WARN. `experiments/` and `prompts/` are never touched. See the migration notes in [CHANGELOG.md](CHANGELOG.md).
 
-**Optional SessionStart hook (Claude Code only):** `python agent-kit/tools/install.py path/to/your-project --hooks` merges a hook into `.claude/settings.json` that runs `notes.py brief` when a session starts, resumes, clears or compacts, so the brief is already in context. It never overwrites existing keys or hooks, adds nothing if the same hook exists, and leaves a `settings.json` it cannot parse untouched (exit 2). Trade-off: one fewer turn per session (no manual `nt brief`) versus a Claude-Code-only mechanism and a few hundred tokens added to every session start, even for a question that does not need the brief. Without `--hooks` nothing changes, and the rule in `AGENTS.md` ("start of session: `nt brief`") works in every agent.
+**Optional SessionStart hook (Claude Code only):** `--hooks` merges a hook into `.claude/settings.json` that runs `notes.py brief` when a session starts, resumes, clears or compacts. It never overwrites existing keys, and leaves a `settings.json` it cannot parse untouched (exit 2). Trade-off: one fewer turn per session versus a few hundred tokens at every session start. Without `--hooks` the rule in `AGENTS.md` ("start of session: `nt brief`") works in every agent.
 
-User-wide install (skills only, every project, Claude Code): `python agent-kit/tools/install.py --user`.
-
-Check that the skills are well-formed and see their token cost: `python agent-kit/tools/validate_skills.py`.
-Prove the kit works on your machine: `python agent-kit/tools/selftest.py` (and `--cp1252` to simulate a Windows console). It builds throwaway git repos and runs the real scripts, including the benchmark harness against a fake `claude` (the real one is never started). CI (`.github/workflows/selftest.yml`) runs the validator and both selftests on Ubuntu, Windows and macOS with Python 3.9 and 3.13.
+Check the skills and their token cost: `python agent-kit/tools/validate_skills.py`. Prove the kit works on your machine: `python agent-kit/tools/selftest.py` (`--cp1252` simulates a Windows console); it builds throwaway git repos, including a real 0.4.0 install from the `v0.4.0` tag (so the clone needs the tags). CI runs the validator and both selftests on Ubuntu, Windows and macOS with Python 3.9 and 3.13.
 
 ## 3. A complete task, start to finish
 
-Example: add a BM25 fallback to a RAG retriever, in Claude Code.
+The loop is: **load context → grill (only the gaps) → plan, or the lite path → execute under the guards and hooks → close the task.** Example: add a BM25 fallback to a RAG retriever, in Claude Code.
 
 **You:** switch to plan mode (`Shift+Tab`, model `opusplan`) and type
 
 ```
 /task Add BM25 as a fallback when the dense retriever returns nothing.
 Constraints: keep Retriever.search() signature, use rank_bm25.
-Done when: a query with a rare drug name returns ≥1 passage; existing tests pass.
-Out of scope: tuning hybrid weights.
+Done when: a query with a rare drug name returns at least 1 passage; existing tests pass.
 ```
 
 **Agent (planning model, read-only):**
-1. `nt brief` → no open task on this branch; one earlier decision about retrieval is shown.
-2. Maps the code (`rmap`, `rmap --symbols`), reads two functions by line range.
-3. Outputs a plan: 3 steps, each with exact files, the change, a verify command and a done criterion.
+1. *Load context*, in proportion to the task: `nt brief` (task, live decisions, `knowledge.md`), grep; for a large task also `rmap --zone` on the files and `git log --oneline -10`.
+2. *Grill, only the gaps.* Every unclear point is looked up, or becomes an `Assumptions:` default, or is a must-ask. The small branch (goal, scope edges, inputs and edge cases, callers, Done when) runs for every task. The architecture branch (new dependency, schema, public API, new module, concurrency, auth, infra) walks `reference/decision-tree.md`; each answer is recorded with `nt decide` at once. Questions come in rounds of at most 5, each with a recommendation, a reason and what was checked.
+3. *Plan:* 2–8 steps, each with files, contract, tests and a verify command. A change of 2 files or fewer with no architecture decision takes the **lite path** instead: the frame and assumptions in 1–3 lines, no plan file, assumptions repeated in the commit body under `Assumptions:`.
 
 **You:** read it, ask for a change if needed, then accept.
 
 **Agent (execution model):**
-1. `gk branch-name feat "bm25 fallback"` → `git switch -c feat/bm25-fallback`
-2. Saves the plan to the path from `pl path`, runs `pl check` (all paths exist, no placeholders) and `pl apply` (the steps become the task note's checklist).
-3. For each step: `pl step N` → edit → `vf` → `nt task --check N --done "…" --next "…"` → commit through gitkit (secret scan, Conventional Commit lint).
-4. Final `vf` → `VERDICT: PASS` → reports done with the verdict line.
+1. `git switch -c feat/bm25-fallback`, saves the plan to the path from `pl path`, runs `pl check` and `pl apply` (the steps become the task note's checklist).
+2. For each step: `pl step N` → tests first → implement → `vf` → `nt task --check N --done "…" --next "…"` → `/commit`. The guards and git hooks run on the way: unsafe git commands are asked or blocked, `pre-commit` scans for secrets, `commit-msg` lints the message, the `Stop` hook runs `verify.sh`.
+3. Final `vf` → `VERDICT: PASS` → reports done with the verdict line. If it took 3 or more tries to find something about the environment, one line goes into `notes/knowledge.md`.
 
-**Next morning, new chat, any agent:** type `làm tiếp` / `continue`. The agent runs `nt brief`, sees "step 3 of 3, next: write the merge test", and continues with ~30 lines of context instead of yesterday's whole conversation.
+**Next morning, new chat, any agent:** type `continue`. The agent runs `nt brief`, sees "step 3 of 3, next: write the merge test", and continues with ~30 lines of context instead of yesterday's conversation.
 
 ## 4. Conventions you will see everywhere
 
-**Exit codes (every script):**
-
-| Code | Meaning | What the agent must do |
-|---|---|---|
-| `0` | OK | Continue |
-| `2` | WARN | Show you the warning and the next command; continue only after your explicit yes |
-| `1` | BLOCK | Stop, fix the cause, re-run. Never bypass |
-
-**Message prefixes (any agent):**
+**Exit codes (every script):** `0` OK → continue · `2` WARN → show you the warning and the next command, continue only after your explicit yes · `1` BLOCK → stop, fix the cause, re-run, never bypass.
 
 | You type | Mode |
 |---|---|
 | `? why is the reranker slow` | Question mode: read-only. No edits, commits or note updates |
-| `/task …` or `task: …` | Start a task: writing-plans, Frame phase first |
+| `/task …` or `task: …` | Start a task: writing-plans, Frame first |
 | `add caching to the reranker` | Task mode |
 | Something ambiguous | Treated as a question; the agent offers to do it |
-
-**Where things live in your project:**
 
 | Path | Content | In git? |
 |---|---|---|
 | `notes/tasks/<branch>.md` | Task note: goal, plan checklist, next step, log | No (personal) |
 | `notes/tasks/<branch>.plan.md` | The accepted plan | No |
 | `notes/decisions.md` | Append-only decision log | Yes |
+| `notes/knowledge.md` | Repo and environment facts, one line each | Yes |
+| `FAILURES.md` | Agent mistakes you corrected, with the control that prevents each | Yes |
 | `.agentkit/logs/` | Full command/test/run logs | No |
 
 ---
@@ -183,314 +158,104 @@ Out of scope: tuning hybrid weights.
 ## 5. Skills
 
 Short names used below (all are `python .agentkit/skills/<skill>/scripts/<file>`):
-`nt` notes.py · `gk` gitkit.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rmap` repomap.py · `dbg` dbg.py.
-
-`AGENTS.md` lists only the ones installed. You rarely type these yourself; the agent runs them. They are listed so you know what is happening and can run them when you want.
-
-### grilling-designs (`/grill`)
-
-**What it does:** a short design interview before planning. The agent first reads what the code and notes already say (`nt brief`, `rmap`, `rmap --zone`) and never asks you what it can look up. Then it walks the decision tree (data, interfaces, errors, storage, config, testing, rollout), parents before children, **one question per message**, each with a recommended answer and a one-line reason. Every settled answer is recorded at once with `nt decide`, and the plan that follows lists them in a `Decisions:` header.
-
-**How to invoke:** `/grill <feature>` (manual only: the skill has `disable-model-invocation: true`, so the agent never starts it by itself; `writing-plans` just suggests it when grilling-designs is installed). In other agents, ask to be grilled on the design.
-
-**An exchange**
-
-```
-Q2/~6 · storage — Where should the index live?
-Recommended: build in memory at startup — 200 rows, so there is no file to keep in sync.
-Reply "ok" to accept, or tell me what you prefer.
-```
-
-Reply `ok` to accept. Reply `đủ rồi` or `enough` to stop: the questions left open become listed assumptions (recorded as one decision) and the agent moves on to the plan.
-
-**Commands used:** `nt decide --topic <area> --text … --why …` after each answer; `pl check` later validates the `Decisions: D-012, D-013` header (missing id → BLOCK, superseded id → WARN naming the replacement).
-
-**Scenarios**
-
-| Situation | What happens |
-|---|---|
-| `/grill add a feedback endpoint` | Reads the code first, then 4–8 single questions with recommendations |
-| You accept every default | Reply `ok` each time; each answer is already in `notes/decisions.md` |
-| You change your mind later | `nt decide … --supersedes D-012`; `pl check` warns if a plan still cites D-012 |
-| You are out of patience | `đủ rồi`: stops, lists assumptions, hands off to writing-plans |
-| A decision already exists for the topic | It is not asked again; the agent cites it |
+`nt` notes.py · `pl` plan.py · `vf` verify.py · `run` run.py · `rmap` repomap.py · `dbg` dbg.py. You rarely type these yourself; the agent runs them.
 
 ### writing-plans
 
-**What it does:** frames a new task, then produces a plan a cheaper model can execute without exploring the repo or making design decisions, and validates it with `pl check` before any code is written. Nothing is created or edited before you accept a plan.
+**What it does:** frames a task, then produces a plan a cheaper model can execute without exploring the repo or making design decisions, and validates it with `pl check` before any code is written. Plan mode is the interface; the plan file is the contract. **Invoke:** `/task <request>` (Claude Code), or `task:` / a plain change request in other agents.
 
-**How to invoke:** `/task <request>` in Claude Code; in other agents, start the message with `/task` or `task:`. A plain feature request works too; `/task` just makes it explicit.
+**Frame (always runs, asks only what is still open):** load context in proportion to the task; sort every unclear point (look up / assume / must ask); the small branch for every task; the architecture branch only when the task touches a listed area; ask in rounds of at most 5 questions; `nt decide` after every architecture answer. The decision tree, question format and stop rule ("enough" turns open questions into assumptions) are in `skills/writing-plans/reference/decision-tree.md`. An open task on the branch is offered for continuing.
 
-**Frame phase** (replaces the old starting-tasks skill): `nt brief` first, then the agent fills
-
-```
-Goal:          <the end result>                    required
-Constraints:   <must not change / required tech>
-Done when:     <how you will know it is finished>
-Out of scope:  <what not to do now>
-```
-
-and asks only for what is missing, in one message, **at most 3 questions**, ranked by how much the answer changes the plan. Each question asks exactly one thing and ends with a default: `Recommended: BM25 — reply 'ok' to accept`. Answer `skip` to leave a field empty. The frame goes into the plan header.
-
-**Lite path:** a change that touches **2 files or fewer** and needs **no design decision** skips the plan file and the task note. The agent states the frame in a line or two, makes the change, and the normal rules still apply: `vf` must exit 0 after the last edit, and the commit goes through managing-git. A third file or an open design choice switches it back to the full plan.
-
-| Situation | You type | What happens |
-|---|---|---|
-| Clear request | `/task Add BM25 fallback … Done when: …` | No questions; goes straight to planning |
-| Vague request | `/task make retrieval better` | One message with ≤3 numbered single-topic questions, each with a recommended default; always asks how you will know it is done |
-| Small tweak in one file | `fix the typo in the CLI help` | Lite path: no plan file |
-| New public interface or schema, ≥3 modules, or an open design choice | `/task …` | If `grilling-designs` is installed, one line suggests `/grill`; it never runs on its own |
-| A task is already open on this branch | `/task …` | Asks: continue the open task, or start a new one (new branch)? |
-
-**Plan format:**
+**Plan format** (`pl template`):
 
 ```
 # Plan: <one-line outcome>
 Constraints: …
 Done when: …
 Out of scope: …
-Decisions: D-012, D-013          (optional, from /grill or nt decide)
+Decisions: D-3a7f, D-91c2          (optional, from nt decide)
 
-## 1. <step title>
-Files: src/retrieval/bm25.py (new), tests/test_bm25.py (new)
-Do: create BM25Index(docs) with search(query, k) -> list[str] using rank_bm25.BM25Okapi
-Verify: python -m pytest tests/test_bm25.py -q
-Done: search("aspirin", 2) returns 2 docs containing "aspirin"
+### Step 1: <step title>
+- Files: src/retrieval/bm25.py (new), tests/test_bm25.py (new)
+- Contract: BM25Index(docs).search(query, k) -> list[str] using rank_bm25.BM25Okapi
+- Tests: test_search_rare_term, test_search_empty_query
+- Out of scope: src/retrieval/hybrid.py
+- Verify: python -m pytest tests/test_bm25.py -q        (optional)
 ```
 
-**What `pl check` enforces:**
+`Mode:` lines are ignored (`pl check` WARNs "Mode is ignored"); the old `## 1.` / Do / Done shape still parses with a WARN.
 
-| Rule | Result |
+| `pl check` rule | Result |
 |---|---|
-| Every step has Files, Do, Verify, Done | BLOCK if missing |
+| Every step has Files, Contract, Tests, Out of scope | BLOCK if missing |
 | Every listed file exists, or is marked `(new)` | BLOCK otherwise (no hallucinated paths) |
-| No `TODO`, `TBD`, `???`, `<placeholder text>` | BLOCK |
-| Steps numbered 1..N | BLOCK |
-| `Decisions:` id not in `notes/decisions.md` | BLOCK |
-| `Decisions:` id that was superseded | WARN (names the replacement) |
-| Vague "Done" ("works correctly") | WARN |
-| Manual verification ("check visually") | WARN |
-| More than 8 steps, or a step over 800 characters | WARN (split it) |
+| No `TODO`, `TBD`, `???`, `<placeholder text>`; steps numbered 1..N | BLOCK |
+| `Decisions:` id not in `notes/decisions.md` | BLOCK; a superseded id WARNs and names the replacement |
+| Manual verification, no tests, glob in Files, more than 8 steps or a step over 800 characters | WARN |
 
-**Commands:** `pl template` (skeleton) · `pl path` (where the plan file goes) · `pl check` · `pl apply` (load steps into the task note; replaces the old plan and logs its progress) · `pl step N` (print only step N for the executor).
-
-**Scenarios**
-
-| Situation | What happens |
-|---|---|
-| Plan mode with Opus, execution with Sonnet (`/model opusplan`) | Opus writes the plan in chat (plan mode is read-only). After you accept, Sonnet saves it, checks it, applies it and executes step by step, reading only `pl step N` |
-| The plan names a file that does not exist | `pl check` blocks; the agent fixes the path or marks it `(new)` |
-| Halfway through, the approach must change | The agent stops and tells you why, updates the plan, then runs `pl check` and `pl apply` again. The old progress is logged in the task note |
-| A small correction (a path) | Edit the plan file, run `pl check`, continue |
+**Commands:** `pl template` · `pl path` · `pl check` · `pl apply` (load steps into the task note; replaces the old plan and logs its progress) · `pl step N` (only step N, for the executor) · `pl field NAME [--cumulative] [--step N]` (one field of the active step; `scripts/plan-step.sh` is a wrapper around it). The **active step** is the first unchecked item of the task note's `## Plan` checklist.
 
 ### keeping-notes
 
 **What it does:** keeps task state in files instead of chat history, so any session (any agent, any model, after `/compact`, next week) can resume from a short brief.
 
-**Two stores:**
-- `notes/tasks/<branch>.md`: one note per task branch. Holds the goal, plan checklist, next action, touched files and a log. Personal, gitignored. Switching branch switches task, and notes are never overwritten.
-- `notes/decisions.md`: project-wide, append-only, committed. Each entry has an id (`D-3f9a`: 4 random hex, so two branches never mint the same one; old `D-007` ids stay valid), date, topic and branch. To change a decision, add a new one with `--supersedes D-007`; the old one stays as history.
-
-**Commands**
+- `notes/tasks/<branch>.md`: one note per task branch (goal, plan checklist, next action, files, log). Personal, gitignored.
+- `notes/decisions.md`: project-wide, append-only, committed. Ids are `D-3f9a` (4 random hex, so branches never collide). To change a decision add a new one with `--supersedes D-007`.
+- `notes/knowledge.md`: committed, one line per fact: `- <fact>; <right way> (verified YYYY-MM-DD: <command or evidence>)`. The agent adds a line after 3 or more tries to find the right way with the environment or a tool, or after you correct a wrong claim about the repo, and says so in one line. Not for bugs (`dbg`), decisions or agent mistakes (`FAILURES.md`).
 
 | Command | Purpose |
 |---|---|
 | `nt init` | Create the layout (the installer does this) |
-| `nt brief [--topic T]` | ~30-line context pack: task, plan, next, recent log, uncommitted files, relevant decisions. On a branch with no task, lists open tasks |
-| `nt task --goal "…" --plan "…" --plan "…"` | Create the task note |
-| `nt task --check 2 --done "…" --next "…" [--files …]` | Record step progress |
-| `nt task --status blocked --next "need API key"` | Mark blocked |
-| `nt task` | Print the current note |
+| `nt brief [--topic T]` | ~30-line pack: task, plan, next, recent log, uncommitted files, `KNOWLEDGE` facts (WARN "consider scoped format" above `notes.max_knowledge_facts`, default 20; exit stays 0), relevant decisions |
+| `nt task --goal "…" --plan "…" --plan "…"` · `nt task --check 2 --done "…" --next "…"` · `nt task --status blocked --next "…"` | Create the note · record step progress · mark blocked |
 | `nt decide --topic retrieval --text "…" --why "…" [--supersedes D-003]` | Record a decision (≤10 lines / 600 chars, enforced) |
-| `nt show --topic retrieval` · `nt show --id D-007` · `nt show --all` | Read decisions (active ones by default) |
-| `nt tasks [--all]` | List task notes |
-| `nt close [--status abandoned]` · `nt sync` | Close the current task; auto-close tasks whose branch was merged or deleted |
-
-**Scenarios**
-
-| Situation | You type | What happens |
-|---|---|---|
-| New chat, continue work | `continue` / `làm tiếp` | `nt brief` → the agent picks up at "next" |
-| You settle a direction | `chốt: use BM25 only as fallback, not hybrid` | `nt decide --topic retrieval …` |
-| "Why did we choose X?" | `? why did we drop the reranker` | `nt show --topic retrieval` → answers from the log with the decision id |
-| Juggling two tasks | `git switch fix/tokenizer` | `nt brief` now shows the tokenizer task; the other note is untouched |
-| A task branch was merged | (automatic) / `nt sync` | Its note is marked done, not deleted |
-| Working in a team | set `notes.commit_tasks: true` | Task notes are committed too |
-
-The agent updates the task note at plan-step boundaries and before commits, not after every action, so the overhead is a few dozen tokens per step.
-
-### managing-git
-
-**What it does:** runs git workflows through checks in `gitkit.py`. The script decides format and safety; the agent writes the commit text; you decide anything risky.
-
-**Who decides what**
-
-| Script decides | Agent decides | You decide |
-|---|---|---|
-| Commit message format, allowed types/scopes | How to group files into commits | Destructive operations |
-| Secret / large-file block | Subject and body wording | Committing directly on a protected branch |
-| Allowed types, subject and body rules | Which type: feat, fix, refactor, … (guided by `reference/commit-examples.md`) | Merge vs rebase |
-| Conflict prediction, branch names | How to resolve a conflict hunk | Overriding a secret false-positive |
-
-**Commands**
-
-| Command | Purpose |
-|---|---|
-| `gk diff [--staged] [paths]` | Size-capped diff that skips lockfiles, notebooks, generated, binary and kit-managed files |
-| `gk lint-msg FILE` / `-m "…"` | Conventional Commit check: type, scope, imperative mood, length, no trailing period, blank line 2, BREAKING footer. Git-generated `Merge`, `Revert`, `fixup!`, `squash!` messages pass |
-| `gk scan --staged` | Blocks private keys, API tokens (OpenAI/Anthropic/HF/GitHub/AWS/Google/Slack), hard-coded passwords, `.env`/`.pem` files, files over 5 MB. Ignores kit-managed paths (`notes/`, `.agentkit/`, `.agentkit.json`, `experiments/runs.jsonl`, `prompts/runs/`). A match is exempt only when the matched value itself is a placeholder (`xxx`, `your_`, `example`, `changeme`, `<…>`, `${…}`); a key given as a `getenv`/`os.environ` default is blocked |
-| `gk branch-name feat "Thêm BM25 fallback" --ticket VMR-12` | → `feat/vmr-12-them-bm25-fallback` (Vietnamese diacritics stripped) |
-| `gk preflight commit\|switch\|merge X\|rebase X\|pull\|push\|stash-pop` | Safety check before the operation; predicts merge conflicts without touching the working tree |
-
-State comes from plain git (`git status -sb`, `git log --oneline -5`, `git stash list`); the pre-0.3 release removed `gk snapshot`, `gk suggest` and `gk stashes`.
-
-**Commit flow** (what happens when you say "commit"): `git status -sb` → group changes by concern (asks you if more than one commit is needed) → stage explicit paths → `preflight commit` → `scan --staged` → capped diff → pick the type, write the message → `lint-msg` until clean → commit. **Code + its tests + its doc line is one commit**, never split and never a question to you. If the repo has the [git hooks](#11-git-hooks), `git commit` runs `scan` and `lint-msg` itself.
-
-**Scenarios**
-
-| Situation | What happens |
-|---|---|
-| "commit" while on `main` | `preflight` returns WARN; the agent asks: commit to `main`, or create a task branch? (configurable: `git.protected_commit` = `ask` / `allow` / `block`) |
-| An API key is in a staged file | `scan` blocks; the agent unstages it and suggests loading it from an env var. If you say it is a false positive, you decide |
-| Changes mix a feature, an unrelated docs fix and a dependency bump | The agent proposes three commits; a feature with its own tests and doc line stays one |
-| "merge develop into my branch" | `preflight merge develop` lists files that will conflict before anything happens |
-| Rebasing a branch you already pushed | WARN: rewrites shared history; needs `--force-with-lease`, which the agent asks before using |
-| Need to switch branches with unfinished work | `preflight switch` warns; the agent stashes with a message and restores later with apply → verify → drop |
-| "undo my last commit" / lost commits | Recovery recipes in `reference/recovery.md` (soft reset, reflog rescue); destructive steps are confirmed with you first |
-| Merge conflict | `reference/conflicts.md`: mechanical hunks resolved by the agent, semantic hunks shown to you with a proposed merge |
-
-Destructive commands (`reset --hard`, any force push, `branch -D`, `clean -fd`, `stash drop/clear`, discarding uncommitted work) are always quoted to you first, with a backup branch or SHA noted.
+| `nt show --topic T` · `--id D-007` · `--all` | Read decisions (active ones by default) |
+| `nt tasks [--all]` · `nt close [--status abandoned]` · `nt sync` | List · close · auto-close tasks whose branch was merged or deleted |
 
 ### verifying-changes
 
 **What it does:** stops the agent from saying "done" without evidence. `vf` detects the project's quality gates, runs them, and prints one verdict with only the failing lines.
 
-**Example output**
-
 ```
 format     SKIP   not detected
 lint       PASS   ruff check --output-format concise .   0.8s
-typecheck  SKIP   not detected
 test       FAIL   python -m pytest -q                   12.3s  log: .agentkit/logs/verify-test-….log
 --- test (5 lines; full log …)
 FAILED tests/test_hybrid.py::test_merge - AssertionError: expected fallback doc
-1 failed, 41 passed in 12.1s
 VERDICT: FAIL (exit 1) — fix the cause, re-run verify. Do not report the task as done.
 ```
 
-The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHING VERIFIED (exit 2)`, `PASS WITH TEST CHANGES (exit 2)`) because agents lose exit codes through pipes. **Never pipe `vf`**; the VERDICT line is authoritative.
+The verdict line carries its exit code (`PASS (exit 0)`, `FAIL (exit 1)`, `NOTHING VERIFIED (exit 2)`, `PASS WITH TEST CHANGES (exit 2)`) because agents lose exit codes through pipes. **Never pipe `vf`**; the guards block it.
 
-**Auto-detection:** ruff / flake8 / black / mypy / pyright (Python, when configured); tests in `tests/` or `test/` are found even with no config file at all, and the runner is chosen by probing: if `python -m pytest --version` works it uses pytest, otherwise (for example a broken `pytest-cov` plugin) it falls back to `unittest discover` when the tests use `unittest.TestCase`, and says why in `--detect`; `package.json` scripts and `tsc` (JS/TS, using the right package manager); `go vet`/`go test`; `cargo clippy`/`cargo test`; Makefile targets. Override any gate in `.agentkit.json`.
+**Auto-detection:** ruff / flake8 / black / mypy / pyright; tests in `tests/` even with no config (pytest, else `unittest discover`, and `vf --detect` says why); `package.json` scripts and `tsc`; `go vet`/`go test`; `cargo clippy`/`cargo test`; Makefile targets. Override any gate in `.agentkit.json`. **Test-integrity guard:** against `HEAD` it flags deleted test files, new `skip`/`xfail` markers and removed assertions (`PASS WITH TEST CHANGES`). **Inner loop:** `vf --affected` runs only the tests `rmap --zone-from-diff` says can be affected; a full `vf` is still required before a commit and before saying "done".
 
-**Test-integrity guard:** compared to `HEAD`, it flags deleted test files, newly added `skip`/`xfail`/`.skip(` markers and removed assertions. If tests "pass" because they were weakened, the verdict is `PASS WITH TEST CHANGES` (exit 2) and the agent must show you the changes.
-
-**Fast inner loop:** `vf --affected` asks `rmap --zone-from-diff` which tests can be affected by your changed files and runs only those (pytest paths or unittest modules). The verdict says `(affected only)`. No affected tests → `test SKIP no affected tests`. If repomap is missing or the runner is not pytest/unittest it runs the full test gate and says why. It is for iterating only: **a full `vf` is still required before a commit and before saying "done".**
-
-**Commands:** `vf` (all gates) · `vf --only lint,test` · `vf --affected` (inner loop) · `vf --detect` (what would run and why) · `vf --no-guard`.
-
-**Scenarios**
-
-| Situation | What happens |
-|---|---|
-| Agent finishes a change | Runs `vf`; reports done only on `VERDICT: PASS`, quoting it |
-| A test fails | The agent sees only the failing lines, fixes the code, re-runs. It greps the saved log if it needs more, instead of re-running |
-| The agent "fixes" a test by adding `@pytest.mark.skip` | Flagged; you are asked to approve or reject |
-| Project has no tests | `NOTHING VERIFIED` (exit 2): the agent tells you and offers to add a test |
-| Wrong command detected | Set `"verify": {"test": "pytest tests/unit -q"}`, or `null` to skip a gate |
-| Slow integration tests | Agent iterates with `vf --only lint,test` on a unit command and runs the full `vf` before commit |
-| Large repo, one module edited | `vf --affected` runs only that module's tests; the full `vf` follows before commit |
-| Tests are `unittest` and pytest is broken | `vf` falls back to `unittest discover`; `vf --detect` shows the pytest error that caused it |
+**Commands:** `vf` · `vf --only lint,test` · `vf --affected` · `vf --detect` · `vf --no-guard`.
 
 ### debugging-systematically
 
-**What it does:** stops guess-and-edit debugging. The agent classifies the failure first, follows that layer's procedure, and records the bug in an append-only journal (`notes/debug.jsonl`, committed) so a recurring bug is recognised.
+**What it does:** stops guess-and-edit debugging. The agent classifies the failure first (code, data, llm), follows that layer's procedure (`reference/layers.md`) and records the bug in an append-only journal so a recurring bug is recognised. It is a core skill: when something fails, `dbg open` comes first.
 
-| Layer | Procedure |
-|---|---|
-| **code** (exception, wrong logic) | Reproduce with `run`, find the zone from the log (`rmap --zone-from-log`), write a failing test first, fix, full `vf` |
-| **data** (bad or shifted inputs) | Inspect the real inputs first (schema, counts, a few samples) before touching code |
-| **llm** (wrong or invalid model output) | Capture the verbatim prompt, raw output and failing field; turn it into a prompt test case; fix the prompt, never loosen the parser |
+| Command | Writes | Where |
+|---|---|---|
+| `dbg open --layer code\|data\|llm --symptom "…" [--repro "<cmd>"]` | appends an `open` event (prints similar past bugs; a repeat is a WARN) | `notes/debug.jsonl` |
+| `dbg hypo B-001 "…" [--result confirmed\|rejected]` | appends a `hypo` event | `notes/debug.jsonl` |
+| `dbg close B-001 --cause "…" [--fix <sha>]` | appends a `close` event (no `--cause` is a BLOCK, nothing written) | `notes/debug.jsonl` |
+| `dbg list [--open] [--layer L]` | nothing (reads) | |
+| `dbg similar "<text>"` | nothing (reads) | |
+| `dbg llm-case B-001 --spec <spec.json> --vars '{…}' --check '{…}'` | appends a test case to your prompt spec, then an `llm-case` event | the `--spec` file (rewritten) and `notes/debug.jsonl` |
 
-**Commands (`dbg`):**
-
-| Command | Purpose |
-|---|---|
-| `dbg open --layer code\|data\|llm --symptom "…" [--repro "<cmd>"]` | Start a bug (`B-3f9a`); prints similar past bugs, a repeat is a WARN (exit 2) |
-| `dbg hypo B-001 "…" [--result confirmed\|rejected]` | Record one hypothesis and what testing it showed |
-| `dbg close B-001 --cause "…" [--fix <sha>]` | Close with the root cause; without `--cause` it BLOCKs (exit 1) |
-| `dbg list [--open] [--layer L]` | Show bugs |
-| `dbg similar "<text>"` | Keyword overlap with past bugs |
-| `dbg llm-case B-001 --spec prompts/x.spec.json --vars '{…}' --check '{…}'` | Append a test case to the project's prompt spec (vars must match the declared inputs; check types are validated) |
-
-**Scenarios**
-
-| Situation | What happens |
-|---|---|
-| Test fails with a traceback | `dbg open --layer code`; `run` the repro; `rmap --zone-from-log` lists the files that matter; a failing test is written before the fix |
-| Retrieval returns nothing for Vietnamese queries | `--layer data`: inspect the documents (encoding, normalisation, counts) before changing the retriever |
-| The model invents a price | `--layer llm`: `dbg llm-case` adds the failing question with `not_contains` as a case; the prompt is changed and the project's prompt tests re-run |
-| Same error as three weeks ago | `dbg open` prints the earlier bug and its cause as a WARN; the agent checks that cause first |
-| You try to close without knowing why | `dbg close` BLOCKs until a root cause is stated |
+The journal path follows `notes.dir`. `llm-case` expects a JSON spec with `inputs` and `cases`; the kit no longer ships the tool that made such specs, so the spec and its test runner are the project's own.
 
 ### economizing-context
 
-**What it does:** two tools that keep the context small.
-
-**`repomap.py`** shows a repo's shape without reading file contents:
-
-```
-$ rmap --depth 3
-proj/  214 files · ~180k tok of text
-src/  (120 files, ~95k tok)
-  vimed/  (118 files, ~94k tok)
-    retrieval/  (14 files, ~21k tok)
-data/  (6 files, ~60k tok, 3 binary)
-…
-$ rmap --symbols src/vimed/retrieval/hybrid.py
-    3-41    class HybridRetriever
-    4-9       def __init__(self, dense, sparse, alpha)
-   11-41      def search(self, query, k)
-  → read a symbol with: sed -n 'START,ENDp' src/vimed/retrieval/hybrid.py
-```
-
-**Blast radius, `rmap --zone` (Python):** before editing a module, planning a refactor or debugging from a traceback, ask which files can be affected. The graph comes from `ast` (nothing is executed; `import a.b`, `from a import b`, relative imports and `src/` layouts are resolved).
-
-```
-$ rmap --zone faq/search.py --hops 2
-SEEDS  faq/search.py
-dist  dir  path  lines  ~tok   (↑ imported-by · ↓ imports)
-   1  ↑    faq/__main__.py  38  ~371
-TESTS
-  tests/test_search.py
-zone 2 of 17 .py files · ~900 tok
-```
-
-`rmap --zone-from-diff` uses the changed and untracked files as seeds; `rmap --zone-from-log run.log` uses the repo files in a Python traceback; `--direction imports|importers|both`, `--hops N`, `--json` for other scripts. It prints paths, line counts and ~tokens only; the agent then reads zone files with `rmap --symbols` and a line range. Dynamic imports (`importlib.import_module(name)`) are reported as `NOTE:` because they cannot be traced. Non-Python repos exit 2 with "zone supports Python only".
-
-Also `rmap --big` lists the most expensive files (never read these whole). It honors `.gitignore` and skips `node_modules`, venvs, caches, `wandb`, `mlruns`, `checkpoints` and binaries.
-
-**`run.py`** runs any command, writes the full output to `.agentkit/logs/`, and prints only status, exit code, duration, unique error lines, the last traceback and the tail. Outputs of 60 lines or fewer are shown whole. It exits with the command's own code.
+**What it does:** two tools that keep the context small. **`repomap.py`** shows a repo's shape without reading file contents (`rmap --depth 3`, `rmap --symbols <file>` then read one line range). **`rmap --zone <file>`** (Python) lists the blast radius from the `ast` import graph: importers, imports and their tests, as paths and token estimates; `--zone-from-diff` and `--zone-from-log run.log` seed it from your changes or a traceback; `--hops N`, `--direction`, `--json`. `rmap --big` lists the most expensive files. **`run.py`** runs any command, writes the full output to `.agentkit/logs/`, and prints only status, exit code, duration, unique error lines, the last traceback and the tail (outputs of 60 lines or fewer are shown whole); it exits with the command's own code.
 
 ```
 $ run --name train -- python train.py --config cfg.yaml
 FAILED exit 1 · 412.3s · 18,240 lines · log: .agentkit/logs/train-20261023-1830.log
 ERRORS (2 unique):
  18231: RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB
-LAST TRACEBACK:
-…
-TAIL (20):
-…
 ```
-
-**Scenarios**
-
-| Situation | Without the skill | With it |
-|---|---|---|
-| Agent explores a new repo | Opens file after file | `rmap` → `rg` → `rmap --symbols` → reads one line range |
-| `pip install -r requirements.txt` | Hundreds of "Collecting…" lines in context | One status line, or the error |
-| Training run with per-step logs | 10k+ lines in context for the rest of the session | Error + traceback + tail; grep the log for more |
-| Test suite with verbose output | Whole log repeated on every later turn | The failing tests only |
-| About to change `retrieval/hybrid.py` | Greps for callers, opens each | `rmap --zone retrieval/hybrid.py`: importers, imports and their tests, as paths |
 
 ---
 
@@ -499,10 +264,8 @@ TAIL (20):
 | Question type | Do this | Effect on the task context |
 |---|---|---|
 | Short, about what the agent already knows | `? …` in the same chat; in Claude Code, `/btw …` | Tiny / none (`/btw` is not saved to history and has no tools) |
-| Needs code reading or a long discussion | New chat (any agent) → `nt brief` → discuss → `chốt …` → `nt decide`. Back in the task chat: `nt show --topic <topic>` | None; only the decision comes back |
+| Needs code reading or a long discussion | New chat → `nt brief` → discuss → record with `nt decide`. Back in the task chat: `nt show --topic <topic>` | None; only the decision comes back |
 | Claude Code only | `/branch <name>` for the discussion, `/resume <task-session>` to return | None; the original session is untouched |
-
-Rule of thumb: for one or two exchanges, just ask in place. Split the chat when the side discussion would add thousands of tokens that the task does not need.
 
 ## 7. Configuration reference
 
@@ -510,54 +273,53 @@ Rule of thumb: for one or two exchanges, just ask in place. Split the chat when 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `git.protected_branches` | `main, master, develop, release/*` | Branches that need care |
-| `git.protected_commit` | `ask` | `ask` (WARN, needs your yes) · `allow` · `block` |
-| `git.commit_types` | Conventional Commits types | Allowed commit types |
-| `git.scopes`, `git.strict_scopes` | `[]`, `false` | Allowed scopes; strict → BLOCK on unknown scopes, else WARN |
+| `git.protected_branches` | `main, master, develop, release/*` | Branches the guards protect |
+| `git.protected_commit` | `ask` | `ask` (you approve) · `allow` · `block` for a commit or push to a protected branch |
+| `git.commit_types`, `git.scopes`, `git.strict_scopes` | Conventional Commits types, `[]`, `false` | `commit-msg` hook: allowed types and scopes (strict → BLOCK on an unknown scope, else WARN) |
 | `git.subject_max`, `git.body_wrap` | 72, 100 | Commit message limits |
-| `git.branch_pattern`, `git.branch_types` | `{type}/{ticket}{slug}` | Branch naming |
-| `git.max_file_mb` | 5 | Block larger files from commits |
-| `git.diff_ignore` | lockfiles, notebooks, build output | Never shown as diffs to the agent |
+| `git.max_file_mb` | 5 | `pre-commit` hook: block larger files |
 | `notes.dir`, `notes.commit_tasks` | `notes`, `false` | Notes location; whether task notes are committed |
 | `notes.max_decision_chars/lines` | 600 / 10 | Decision size limit |
+| `notes.max_knowledge_facts` | 20 | `nt brief` warns above this many facts |
 | `notes.base_branch` | auto | Branch used by `nt sync` to detect merges |
-| `context.max_output_lines` | 60 | `run.py` prints outputs up to this length whole |
-| `context.ignore_dirs` | `[]` | Extra directories for `repomap.py` to skip (e.g., `"data"`) |
-| `context.zone_max_files` | 40 | Zone file lines `rmap --zone` prints before "… +k more" |
+| `context.max_output_lines`, `context.ignore_dirs`, `context.zone_max_files` | 60, `[]`, 40 | `run.py` whole-output limit; extra dirs for `repomap.py` to skip; `rmap --zone` file lines |
 | `debug.min_similarity` | 0.4 | Keyword overlap (0–1) at which `dbg` calls two bugs similar |
 | `verify.format/lint/typecheck/test` | `auto` | `auto`, a command, or `null` to skip |
-| `guards.*` | see [Guards](#configuration-guards) | `ruff`, `pytest`, `diff_cover`, `scope` switches, tool commands, `fail_under`, `coverage_xml`, `scope_ignore`, `merge_convention`, `require_merge_commits`, `verify_on_push` |
+| `guards.*`, `fs.*` | see [Guards](#configuration-guards) | Stage switches, tool commands, `fail_under`, `destructive`, outside-repo writes, protected reads |
 
 ## 8. Using other agents
 
-- **Rules:** most agents read `AGENTS.md` at the repo root. Claude Code reads `CLAUDE.md`, which imports `AGENTS.md`.
+- **Rules:** most agents read `AGENTS.md` at the repo root. Claude Code reads `CLAUDE.md`, which imports it.
+- **Git hooks:** `--git-hooks` gates any agent (or a human) with the secret scan and the commit-message lint; they need no Claude Code.
 - **Skills:** `AGENTS.md` refers to scripts by path under `.agentkit/skills/`, so any agent that can run a terminal command can use them. Agents that support the SKILL.md format natively can also be pointed at `.agentkit/skills/`.
-- **Read-only mode:** for a series of questions, use your agent's read-only mode on top of the `?` prefix (Claude Code plan mode, Cursor Ask mode).
-- **Claude-Code-only extras:** `/task` (and `/grill`) as slash commands, the optional SessionStart hook (`install.py --hooks`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
+- **Read-only mode:** for a series of questions use your agent's read-only mode on top of the `?` prefix (Claude Code plan mode, Cursor Ask mode).
+- **Claude-Code-only:** `/task`, the commit-commands plugin (`/commit`, `/commit-push-pr`), the SessionStart hook (`--hooks`), the guard hooks (`--guards`), `/btw`, `/branch`/`/resume`, `opusplan`. Everything else is agent-neutral.
 
 ## 9. Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| A skill does not trigger | Name it in the request ("use managing-git to commit") or check `validate_skills.py`. In Claude Code you can also call `/managing-git` |
+| A skill does not trigger | Name it in the request ("use writing-plans") or check `validate_skills.py`. In Claude Code you can also call `/writing-plans` |
 | `verify.py` says "tool missing" | Install the tool declared by the project, or set the gate's command in `.agentkit.json` |
-| `gitkit preflight merge` cannot predict conflicts | Needs git ≥ 2.38 (`merge-tree --write-tree`) |
 | `nt brief` shows no task | You are on a branch without a task note (e.g., `main`); it lists open tasks to switch to |
 | Windows: no symlinks | The installer copies instead; re-run it after updating the kit |
-| Windows: garbled Vietnamese or `UnicodeEncodeError` | Update the kit: every script now switches stdout/stderr to UTF-8; `python tools/selftest.py --cp1252` checks it |
-| A commit is rejected by a git hook | Read the `BLOCK:`/`ERROR:` lines the hook printed, fix the cause (remove the secret, reword the message) and commit again. Never `--no-verify` |
-| `vf` says `NOTHING VERIFIED` though tests exist | `vf --detect` shows the reason (for example `pytest not runnable: …`); set `verify.test` in `.agentkit.json` if detection is wrong |
+| Windows: garbled Vietnamese or `UnicodeEncodeError` | Update the kit: every script switches stdout/stderr to UTF-8; `python tools/selftest.py --cp1252` checks it |
+| A commit is rejected by a git hook | Read the `BLOCK:`/`ERROR:` lines, fix the cause (remove the secret, reword the message) and commit again. Never `--no-verify` |
+| A commit fails with "run install.py again" | The hook is from 0.4.0 or `.agentkit/scripts/gitkit.py` is missing: run `install.py <project> --git-hooks` |
+| `/commit` is not found | Run `claude plugin install commit-commands@claude-plugins-official --scope project` once per machine |
+| `vf` says `NOTHING VERIFIED` though tests exist | `vf --detect` shows the reason; set `verify.test` in `.agentkit.json` if detection is wrong |
+| `install.py` says "removed in 0.5.0" for `--with` | Drop the flag; every skill is installed |
 
 ## 10. Adding your own skill
 
-1. Create `skills/<gerund-name>/SKILL.md` with frontmatter: `name` (equals the folder name, lowercase-hyphen) and `description` (third person, what it does + "Use when …", ≤1024 characters). The description is the only part that is always loaded, so make every word count.
+1. Create `skills/<gerund-name>/SKILL.md` with frontmatter: `name` (equals the folder name, lowercase-hyphen) and `description` (third person, what it does + "Use when …", ≤1024 characters). The description is the only part always loaded, so make every word count.
 2. Keep the body under ~150 lines. Move detail to `reference/*.md` (one level deep, linked from SKILL.md).
-3. Put rule-based logic in `scripts/` (stdlib only, `--help`, exit codes 0/1/2, explicit error messages that say how to fix). Let the model handle only what needs judgment.
+3. Put rule-based logic in `scripts/` (stdlib only, `--help`, exit codes 0/1/2, error messages that say how to fix). Let the model handle only what needs judgment.
 4. Run `python tools/validate_skills.py`, then `python tools/install.py <project>`.
 
 ## 11. Git hooks
 
-Rules in `AGENTS.md` are advice; hooks make them binding for any agent, and for you.
+Git workflow (commit, push, PR) belongs to the **`commit-commands@claude-plugins-official`** plugin: `/commit`, `/commit-push-pr`, `/clean_gone`. The installer enables it in the settings file (`enabledPlugins`; per the Claude Code docs the key only enables a plugin, each person still installs it with `claude plugin install … --scope project`). The kit keeps what the plugin cannot enforce for other agents: two git hooks and the [guards](#13-guards-scripts-that-always-run-v030).
 
 ```bash
 python agent-kit/tools/install.py path/to/your-project --git-hooks
@@ -566,14 +328,13 @@ python agent-kit/tools/install.py path/to/your-project --uninstall-git-hooks
 
 | Hook | Runs | Effect |
 |---|---|---|
-| `pre-commit` | `gitkit.py scan --staged` | A secret, a `.env`/key file or an oversized file in the staged changes rejects the commit |
-| `commit-msg` | `gitkit.py lint-msg "$1"` | A message that is not a valid Conventional Commit rejects the commit; `Merge`, `Revert`, `fixup!`, `squash!` pass |
+| `pre-commit` | `.agentkit/scripts/gitkit.py scan --staged` | A secret, a `.env`/key file or an oversized file in the staged changes rejects the commit |
+| `commit-msg` | `.agentkit/scripts/gitkit.py lint-msg "$1"` | A message that is not a valid Conventional Commit rejects the commit; `Merge`, `Revert`, `fixup!`, `squash!` pass; a body may carry an `Assumptions:` block |
 
-- Only exit code `1` (BLOCK) rejects the commit; a WARN (`2`) passes. The hook skips silently when `.agentkit/skills/managing-git` is not there.
-- **Never overwrites a hook you already have.** The kit adds a block between `# >>> agent-kit >>>` and `# <<< agent-kit <<<` right after the shebang (so an `exit 0` at the end of your hook cannot skip it), and does nothing if the block is already there. A hook in another language (Python, Node) is left untouched with a WARN and the exact command to call by hand.
-- Honours `core.hooksPath` and works in Git for Windows' `sh`. The block runs the Python that ran the installer (absolute path), falling back to `python3`, `python`, then `py -3`.
-- `--uninstall-git-hooks` removes only those blocks; a hook the kit created itself is deleted, yours is restored byte for byte.
-- Agents must never use `--no-verify`: a hook BLOCK is fixed, not bypassed (stated in `AGENTS.md` and managing-git).
+- Only exit code `1` (BLOCK) rejects the commit; a WARN (`2`) passes. If `gitkit.py` is missing the hook **fails loudly** ("run install.py again") instead of skipping the check; the same holds for a 0.4.0 hook once the old skill is gone (the installer leaves a small shim at the old path and WARNs).
+- **Never overwrites a hook you already have.** The kit's block sits between `# >>> agent-kit >>>` and `# <<< agent-kit <<<` right after the shebang; re-running `--git-hooks` rewrites that block in place (no duplicate, your lines stay). A hook in another language is left untouched with a WARN.
+- Honours `core.hooksPath`, works in Git for Windows' `sh`, and runs the Python that ran the installer (else `python3`, `python`, `py -3`). `--uninstall-git-hooks` removes only the kit's blocks.
+- Agents must never use `--no-verify`: a hook BLOCK is fixed, not bypassed (`AGENTS.md`; the guards block it).
 
 ## 12. Benchmark: does the kit help?
 
@@ -583,7 +344,7 @@ python agent-kit/tools/install.py path/to/your-project --uninstall-git-hooks
 |---|---|
 | `none` | `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agentkit/`, `.agentkit.json`, `notes/` removed |
 | `rules` | `none` plus `templates/AGENTS.rules-only.md` (mode, token and safety rules, no scripts) |
-| `kit` | `none` plus `install.py --git-hooks` (core skills, plus the task's `with`) |
+| `kit` | `none` plus `install.py --git-hooks` |
 
 ```bash
 python tools/bench/bench.py overhead --fixture path/to/repo --model sonnet --trials 3
@@ -593,186 +354,127 @@ python tools/bench/bench.py report bench/results.jsonl --csv bench/summary.csv
 ```
 
 - **Cost:** `run` prints the worst case (sessions × `--max-budget-usd`) and exits 2 until you add `--yes`. `bench/` is gitignored.
-- **Task folder** `tasks/<ID>/`: `task.md` (a line `---new-session---` starts a *new* `claude -p` session, not `--resume`, which tests resuming from notes), `meta.json` (`max_turns_per_session`, `with`, `oracle_cmd`), `oracle/` (hidden tests, copied in only after the agent finishes), optional `seed/` (files copied over the clone before the setup commit, so they are part of the starting state and never count as agent changes). A `{{FAKE_KEY}}` in `task.md` is replaced per run by a freshly generated fake key (stored as `fake_key` in the result row, passed to the oracle as `$BENCH_FAKE_KEY`, and counted by `secret_in_history` in diffs and commit messages), so no literal key lives in this repo. `T1`–`T5` target the mini-faq-rag fixture: T1 `--json` output across two sessions, T2 an eval script (recall@1/@3), T3 an API-key config with a key pasted in the prompt, T4 accent-insensitive matching with a 12-turn first session then "continue", T5 "make all tests pass" with a pre-seeded hard test.
-- **Isolation:** sessions run with `--setting-sources project,local --strict-mcp-config`, so your own user-level skills and MCP servers do not leak into the comparison (`--no-isolate` to include them). On the author's machine this cut the fixed context of an empty prompt from about 23.7k to 6.9k tokens. The prompt goes on stdin because npm's `claude.cmd` mangles multi-line arguments on Windows.
-- **Recorded per run** (one JSON line): success (oracle exit 0), input / output / cache-creation / cache-read tokens, cost, turns, duration, tool calls by name, `kit_calls` (kit scripts invoked, by script), loaded skills, and six violations: `secret_in_history`, `tests_modified` (fixture tests edited or deleted, or skip/xfail added), `commits_on_protected`, `bad_commit_msgs`, `uncommitted_changes`, `no_verify_used`.
-- **`overhead`** sends `Reply with exactly: ok` per condition and reports the first message's input + cache-creation tokens: the fixed price of the rules and skill descriptions.
-- **`report`** prints, per task and condition then overall: success rate, median and min–max total tokens (input + output + cache creation), median cache-read, cost and turns, violation totals, each with its delta against `none`.
+- **Task folder** `tasks/<ID>/`: `task.md` (a line `---new-session---` starts a new `claude -p` session, which tests resuming from notes), `meta.json` (`max_turns_per_session`, `oracle_cmd`), `oracle/` (hidden tests, copied in after the agent finishes), optional `seed/`. A `{{FAKE_KEY}}` in `task.md` is replaced per run by a fresh fake key, counted by `secret_in_history`. `T1`–`T5` target the mini-faq-rag fixture.
+- **Isolation:** sessions run with `--setting-sources project,local --strict-mcp-config`, so your own user-level skills and MCP servers do not leak into the comparison (`--no-isolate` to include them).
+- **Recorded per run** (one JSON line): success (oracle exit 0), tokens (input / output / cache), cost, turns, duration, tool calls, `kit_calls`, loaded skills, and six violations: `secret_in_history`, `tests_modified`, `commits_on_protected`, `bad_commit_msgs`, `uncommitted_changes`, `no_verify_used`. `overhead` reports the fixed token price of the rules and descriptions; `report` prints per task and condition the success rate, median tokens, cost, turns and violations against `none`.
 
-The selftest runs all of this against a fake `claude` on `PATH` that emits canned stream-json; neither the selftest nor CI starts the real one.
+The selftest runs all of this against a fake `claude` on `PATH`; neither the selftest nor CI starts the real one.
 
 ## 13. Guards: scripts that always run (v0.3.0)
 
-Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are plain bash scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none (a human at a terminal).
+Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none.
 
-**Requirements:** `bash`, `git`, Python 3.9+ and `jq` (on Windows: Git for Windows' bash). The two `PreToolUse` guards (`guard-git.sh`, `guard-fs.sh`) are thin wrappers around `guard.py` (standard library only) and need no `jq`; `py.sh` finds the interpreter (python3, python, `py -3`; the Microsoft Store `python3` stub is skipped) and without Python they fail loudly (exit 2) instead of letting everything through. `jq` stays a hard prerequisite of the rest: `verify.sh`, `pre-push` and `plan-step.sh` read `.agentkit.json` with it (through `lib.sh`), so `install.py --guards` checks `bash -c 'command -v jq'` first and exits 1 without writing anything when it is missing. Install it with `winget install jqlang.jq` (Windows; winget may not put it on PATH: copy `jq.exe` into `~/bin` or add its folder to PATH), `brew install jq` (macOS) or `sudo apt install jq` (Debian/Ubuntu). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
+**Requirements:** `bash`, `git`, Python 3.9+ and `jq` (on Windows: Git for Windows' bash). `guard-git.sh` and `guard-fs.sh` wrap `guard.py` (standard library) and need no `jq`; `py.sh` finds the interpreter (python3, python, `py -3`; the Microsoft Store stub is skipped) and without Python they fail loudly (exit 2). `verify.sh` and `pre-push` read `.agentkit.json` with `jq`, so `install.py --guards` checks `bash -c 'command -v jq'` first and exits 1 without writing anything when it is missing (`winget install jqlang.jq`, `brew install jq`, `sudo apt install jq`). A stage whose tool (`ruff`, `pytest` + `pytest-cov`, `diff-cover`) is missing **fails with an install-or-disable message**, it never passes silently.
 
-**Two real failures these exist for** (details and the control for each: [FAILURES.md](FAILURES.md)):
+**Real failures these exist for** (details and the control for each: [FAILURES.md](FAILURES.md)):
 
 | Failure | Control |
 |---|---|
-| The agent fast-forwarded a stage branch into `main`; the repo convention is a `--no-ff` merge commit | `guard-git.sh` blocks the command and prints how to inspect the convention; `pre-push` rejects the push even if the agent got around the hook; managing-git has a mandatory pre-merge `git log --first-parent --merges -5` |
-| Code drifted from the plan; transformations shipped untested or weakly tested | Plan steps are machine-readable; `verify.sh` fails on files outside the plan and on uncovered changed lines |
-| The agent piped `vf` into `tail` and a failing step was committed (the pipe hides the exit code) | `guard-git.sh` blocks `verify.py`, `vf` and `verify.sh` piped into another command; a redirect to a file passes |
+| The agent fast-forwarded a stage branch into `main`; the repo convention is a `--no-ff` merge commit | `guard-git.sh` blocks the command and prints how to inspect the convention; `pre-push` rejects the push even if the hook was bypassed; `AGENTS.md` asks for `git log --first-parent --merges -5 <target>` before any merge into a protected branch |
+| Code drifted from the plan; transformations shipped untested | Plan steps are machine-readable; `verify.sh` fails on files outside the plan and on uncovered changed lines |
+| The agent piped `vf` into `tail` and a failing step was committed | `guard-git.sh` blocks `verify.py`, `vf` and `verify.sh` piped into another command; a redirect to a file passes |
 | A hook rewrote a file in another project | `ruff-fix.sh` leaves files of other repos alone; `guard-fs.sh` and `guard-git.sh` ask before the agent writes, edits or deletes a file outside the repo |
 
 ### What each script does
 
 | Script | Runs from | Behavior |
 |---|---|---|
-| `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | Judges a shell command with `guard.py bash`; the rules are in [the table below](#guard-rules). Follows `git switch/checkout` and `cd` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes, `bash -c` and `eval` (three levels). The merge block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
-| `guard-fs.sh` | Claude Code `PreToolUse` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`), or by hand: `guard-fs.sh path/to/file` | Judges the file about to change with `guard.py edit`. In the repo (or a worktree of it) passes; outside it `fs.allow_write` passes and everything else follows `fs.outside_repo_write` (ask or block). The message prints the absolute path, after `~`, `$HOME`, relative paths (from the hook's `cwd`), `..`, symlinks (also for a file that does not exist yet), drive letters and `/c/…` are resolved |
-| `guard.py` | the two wrappers above | The logic: tokenizer, rules, path resolution. Standard library, Python 3.9+. `guard.py bash [COMMAND…]` and `guard.py edit [PATH]`; with no argument both read the Claude Code hook JSON from stdin (and use its `cwd`) |
-| `py.sh` | sourced by the wrappers; `install.py` copies its `ak_find_py` function into the git hooks | The one place that finds Python: python3, python, `py -3`; the Microsoft Store stub (`*/WindowsApps/*`) is skipped |
-| `pre-push` | git (any agent, or none) | For a push to a protected branch every commit on the pushed range's **first-parent line** must be a merge commit (≥ 2 parents), so a fast-forwarded feature branch is refused. Handles a new branch on the remote; deletes and tags are not judged; the first push to a remote with no branches is let through. Then runs `verify.sh` |
-| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push` (`--push`), by hand | The single "is this done?" gate, see below; `--stages`, `guards.hook_stages` and `guards.push_stages` pick which stages run per caller |
-| `plan-step.sh <field>` | `verify.sh`, the agent | Prints a field of the active plan step (`title mode files contract tests out-of-scope verify`); `--cumulative` for steps 1..active; a missing field, step or plan is an error |
-| `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only, and only when it belongs to this repository (a file in another repo or outside any repo is left alone); anything else is a no-op. Problems it cannot fix are shown to the agent |
+| `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | Judges a shell command with `guard.py bash` ([rules below](#guard-rules)). Follows `git switch/checkout` and `cd` earlier in the line, `&&`/`;`/`\|`, `git -C`, env prefixes, `bash -c` and `eval` (three levels) |
+| `guard-fs.sh` | Claude Code `PreToolUse` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`), or `guard-fs.sh path/to/file` | Judges the file about to change with `guard.py edit`: in the repo (or a worktree of it) passes; outside it `fs.allow_write` passes and the rest follows `fs.outside_repo_write` |
+| `guard.py` | the two wrappers | The logic: tokenizer, rules, path resolution. `guard.py bash [COMMAND…]`, `guard.py edit [PATH]`; with no argument both read the Claude Code hook JSON from stdin |
+| `gitkit.py` | the `pre-commit` and `commit-msg` git hooks | `scan --staged` and `lint-msg`; see [Git](#11-git-hooks) |
+| `py.sh` | sourced by the wrappers; its `ak_find_py` is copied into the git hooks | The one place that finds Python |
+| `pre-push` | git | For a push to a protected branch every commit on the pushed range's first-parent line must be a merge commit; then runs `verify.sh` |
+| `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push` (`--push`), by hand | The single "is this done?" gate; `--stages`, `guards.hook_stages`, `guards.push_stages` pick the stages per caller |
+| `plan-step.sh <field>` | `verify.sh`, the agent | Wrapper around `plan.py field` (no `jq`): `title mode files contract tests out-of-scope verify`; `--cumulative` for steps 1..active |
+| `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only, and only when it belongs to this repository |
 | `lib.sh` | sourced | Config reading (`jq` on `.agentkit.json`), protected-branch matching, base branch, slug |
 
-<a id="guard-rules"></a>**Rules of `guard-git.sh` and `guard-fs.sh`** (all in `guard.py`; tests: `scripts/tests/test_guard_py.py`, `test_guard_git.sh`). A rule answers allow, **ask** (Claude Code shows its permission prompt) or **BLOCK**; the first BLOCK wins, then the first ask. Set `AGENTKIT_HEADLESS=1` for runs nobody watches (`claude -p`, CI): every ask then becomes a BLOCK that says so. The guard never guesses that it is headless.
+<a id="guard-rules"></a>**Rules of `guard-git.sh` and `guard-fs.sh`** (all in `guard.py`; tests: `scripts/tests/test_guard_py.py`, `test_guard_git.sh`). A rule answers allow, **ask** (Claude Code shows its permission prompt) or **BLOCK**; the first BLOCK wins, then the first ask. Set `AGENTKIT_HEADLESS=1` for runs nobody watches (`claude -p`, CI): every ask then becomes a BLOCK that says so.
 
 | Rule | Decision | Setting |
 |---|---|---|
 | `git merge` on a protected branch without `--no-ff`, with `--ff-only` or `--squash` | BLOCK | `git.protected_branches` |
 | commit on, or push to, a protected branch | ask | `git.protected_commit` (`ask`/`allow`/`block`) |
-| `--no-verify`; `-n` on `git commit` only (on `push` it is a dry run and passes); `git -c core.hooksPath=…` (key in any case); `git config … core.hooksPath` (reading or unsetting it passes) | BLOCK | |
-| force push (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, a `+` refspec) to a protected branch | BLOCK | |
-| force push to a branch that is not protected | ask | `guards.destructive` |
-| `reset --hard\|--merge\|--keep`, `branch -D` or `-d --force`, `clean -f` (not with `-n`), `stash drop\|clear`, `checkout -- <path>` or `checkout .`, `restore` without `--staged`, `push --delete` or `:branch`, `filter-branch`, `filter-repo`, `update-ref -d`, `reflog expire`, `gc --prune=now` | ask | `guards.destructive` (`ask`/`block`/`allow`) |
-| `verify.py`, `vf` or `verify.sh` piped (`\|`, `\|&`) into another command (the exit code is lost); `> log` and `\|\|` pass | BLOCK | |
-| Edit/Write/MultiEdit/NotebookEdit of a file outside the repo | ask | `fs.outside_repo_write` (`ask`/`block`), `fs.allow_write` |
-| in Bash: `rm`, `rmdir`, `mv`, `cp` (destination), `ln`, `touch`, `mkdir`, `chmod`, `chown`, `truncate`, `tee`, `dd of=`, `install`, `sed -i`, `perl -i`, and the redirects `>` `>>` `2>` `&>` with a target outside the repo (`/dev/null`, `/dev/stdout`, `/dev/stderr` always pass) | same as the line above | `fs.outside_repo_write`, `fs.allow_write` |
-| `rm`, `mv`, `truncate`, `dd`, `sed -i`, `perl -i` or `>` whose target holds a variable the guard cannot resolve (`rm -rf $BUILD_DIR`), or is relative to a `cd` it lost track of | ask | `guards.destructive` |
-| any word of a Bash command that resolves to a file matching `fs.deny_read` (`cat ~/.ssh/id_rsa`, `git add .env`), unless `fs.allow_read` matches | BLOCK | `fs.deny_read`, `fs.allow_read` |
+| `--no-verify`; `-n` on `git commit`; `git -c core.hooksPath=…`; `git config … core.hooksPath` (reading or unsetting passes) | BLOCK | |
+| force push to a protected branch | BLOCK | |
+| force push to another branch | ask | `guards.destructive` |
+| `reset --hard\|--merge\|--keep`, `clean -f`, `stash drop\|clear`, `checkout -- <path>`, `restore` without `--staged`, `push --delete`, `filter-branch`, `update-ref -d`, `reflog expire`, `gc --prune=now`, `branch -D` or `-d --force` | ask | `guards.destructive` (`ask`/`block`/`allow`) |
+| `branch -D` where every operand is a local branch whose upstream `git branch -vv` shows as `[origin/x: gone]` (what `/clean_gone` deletes); never a protected branch, never `-r`, not under `guards.destructive=block` | allow | |
+| `verify.py`, `vf` or `verify.sh` piped (`\|`, `\|&`) into another command; `> log` and `\|\|` pass | BLOCK | |
+| Edit/Write of a file outside the repo; in Bash `rm`, `mv`, `cp` (destination), `ln`, `touch`, `mkdir`, `chmod`, `tee`, `sed -i`, … and redirects with a target outside the repo | ask | `fs.outside_repo_write`, `fs.allow_write` |
+| `rm`, `mv`, `dd`, `sed -i` or `>` whose target holds a variable the guard cannot resolve, or is relative to a `cd` it lost track of | ask | `guards.destructive` |
+| a Bash word that resolves to a file matching `fs.deny_read` (`cat ~/.ssh/id_rsa`, `git add .env`), unless `fs.allow_read` matches | BLOCK | `fs.deny_read`, `fs.allow_read` |
 
-**What "the repo" is.** The git work tree around the hook's working directory, plus every worktree of the same repository (same `git rev-parse --git-common-dir`). A path is resolved first: `~` and `$HOME`, a relative path from the hook's `cwd` (and, in Bash, from the last literal `cd`), `..`, symlinks (the nearest existing directory is resolved, so a new file below a link that points out of the repo is outside), the drive letter and case on Windows, and Git Bash's `/c/Users/…`. Outside any repository the working directory counts as the project root.
+**What "the repo" is:** the git work tree around the hook's working directory plus every worktree of the same repository; paths are resolved first (`~`, `$HOME`, relative paths from `cwd` or the last literal `cd`, `..`, symlinks, drive letters). **Reading protected files:** `fs.deny_read` is enforced by the Bash guard and by `Read(...)` rules `install.py --guards` merges into `permissions.deny` (Claude Code applies a Read deny best effort to Grep and Glob; `fs.allow_read` becomes `Read(!pattern)` for relative patterns only; docs: https://code.claude.com/docs/en/permissions). An `.env` outside the project directory is stopped by the Bash guard but not by the Read rule.
 
-**Reading protected files.** `fs.deny_read` is enforced twice. `guard.py bash` blocks any word that resolves to a matching file. `install.py --guards` also adds one `Read(...)` rule per pattern to `permissions.deny` of the Claude Code settings file that holds the hooks (merged: your own rules stay, nothing is added twice). From the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions): a `Read` deny rule is applied, best effort, to the built-in tools that read files, so Grep and Glob are covered, and it also stops Edit and Write on that path; rules use gitignore syntax (`~/x/**` from home, `//x` absolute, a relative pattern such as `**/.env` matches under the project directory only); deny beats allow, and the only exception is a `Read(!pattern)` rule listed after the rule it carves out, in the same file and for relative patterns only, which is how `fs.allow_read` (`**/.env.example` …) is installed. Consequences: an `.env` outside the project directory is stopped by the Bash guard but not by the Read tool rule, and an `fs.allow_read` pattern that starts with `~` or `/` is honoured by `guard.py` only (the installer says so). No hook is used for Read/Grep/Glob: it would add about 0.4 s to every read.
-
-**`verify.sh` stages, in order** (each can be switched off, see [Configuration](#configuration-guards)):
+**`verify.sh` stages, in order** (each can be switched off):
 
 | Stage | Runs | Fails when |
 |---|---|---|
 | `lint` | `ruff check` and `ruff format --check` | any violation or unformatted file |
 | `tests` | `pytest --cov --cov-report=xml:<guards.coverage_xml>` | a test fails, or none is collected |
-| `diff-cover` | `diff-cover <xml> --compare-branch=<base> --fail-under=<N>`: coverage of the **changed lines only** | below `fail_under` (default 90); skipped when tests failed |
-| `scope` | `git diff --name-only <base>...HEAD` plus uncommitted and untracked files, against the `Files:` of plan steps **1..active** | `Out-of-plan file: X. Log the reason in the decision log or revert.` A file passes if a decision logged **on this branch** names its full path (`nt decide --topic scope --text "src/x.py: needed by step 1"`). Skipped when the branch has no plan (lite path), and in `--hook` mode when the plan is saved but not applied yet (no task note) |
+| `diff-cover` | coverage of the **changed lines only** against the base branch | below `fail_under` (default 90); skipped when tests failed |
+| `scope` | changed files against the `Files:` of plan steps **1..active** | `Out-of-plan file: X.` A file passes if a decision logged on this branch names its full path (`nt decide --topic scope --text "src/x.py: needed by step 1"`). Skipped without a plan (lite path) |
 
-It prints a compact summary to stderr, the failing stage's key lines, and `VERDICT: PASS (exit 0)` / `VERDICT: FAIL (exit N)`; nothing goes to stdout.
+<a id="verify-hook-mode"></a>**Hook mode (`--hook`, the `Stop` hook) blocks only on what the agent can fix alone.** A plan that is saved but not applied (no task note) is `SKIP  plan not applied yet`; no plan is `SKIP` (lite path); `stop_hook_active: true` in the hook JSON ([hooks docs](https://code.claude.com/docs/en/hooks)) prints the summary and exits 0, so a stop is blocked at most once per chain.
 
-<a id="verify-hook-mode"></a>**Hook mode (`--hook`, the Claude Code `Stop` hook) blocks only on what the agent can fix alone** (lint errors, out-of-plan files, failing tests). A state that waits for the user must not block, or every turn that ends with a question to the user is sent back to the agent, which can only loop:
-- **Plan saved but not applied** (no task note, e.g. `pl check` WARNed and the agent is waiting for a yes): scope is `SKIP  plan not applied yet`. The plain CLI and `--push` still fail with `no task note at …`.
-- **No plan at all**: scope is `SKIP` (lite path), as before.
-- **`stop_hook_active: true`** in the hook's stdin JSON (Claude is already continuing because of a Stop hook; [hooks docs](https://code.claude.com/docs/en/hooks)): `verify.sh` prints the full summary, ends with `VERDICT: FAIL (exit 0, not blocking: stop_hook_active …)` and exits 0, so it blocks a stop at most once per chain. This also covers early errors such as an unknown stage name in `guards.hook_stages`.
+| Script | Block |
+|---|---|
+| `guard-git.sh`, `guard-fs.sh` from hook JSON on stdin | **exit 2** (stderr goes to the model; exit 1 would not block). "Ask" = JSON on stdout, exit 0. With arguments: exit 1 |
+| `verify.sh` | exit 1; **exit 2 with `--hook`** unless `stop_hook_active` is true |
+| `ruff-fix.sh` (`PostToolUse`) | exit 2 shows stderr to the agent (the edit already happened) |
+| `pre-push`, `plan-step.sh` | any non-zero |
 
-**Exit codes**
-
-| Script | Convention | Block |
-|---|---|---|
-| `guard-git.sh` from hook JSON on stdin | Claude Code hook | **exit 2** (stderr goes to the model). Exit 1 would *not* block. "Ask" = JSON on stdout, exit 0 |
-| `guard-git.sh` with the command as arguments | kit / git | exit 1; "ask" JSON on stdout, exit 0 |
-| `guard-fs.sh` from hook JSON on stdin / with a path as argument | Claude Code hook / kit | same as `guard-git.sh`: exit 2 / exit 1 to block, "ask" JSON on stdout, exit 0 |
-| `verify.sh` | CLI; `--hook` = Claude Code `Stop` hook | exit 1 by default, **exit 2 with `--hook`** (keeps the agent working), but never when the hook input has `stop_hook_active: true` (see [hook mode](#verify-hook-mode)). With `--hook`, nothing changed against the base branch exits 0 at once |
-| `ruff-fix.sh` | Claude Code `PostToolUse` hook | exit 2 shows stderr to the agent (the edit already happened) |
-| `pre-push`, `plan-step.sh` | git hook / CLI | any non-zero |
-
-Debug output always goes to stderr; stdout is reserved for the "ask" JSON because Claude Code may parse it.
+Debug output always goes to stderr; stdout is reserved for the "ask" JSON.
 
 ### Install
 
 ```bash
-python agent-kit/tools/install.py path/to/repo --guards           # personal trial (default)
-python agent-kit/tools/install.py path/to/repo --guards --team    # team-wide
-python agent-kit/tools/install.py path/to/repo --uninstall-git-hooks   # also removes the pre-push block
+python agent-kit/tools/install.py path/to/repo --guards           # personal trial: hooks in .claude/settings.local.json
+python agent-kit/tools/install.py path/to/repo --guards --team    # team-wide: hooks in .claude/settings.json (commit it)
 ```
 
-| | local trial (default) | `--team` |
-|---|---|---|
-| Claude Code hooks go to | `.claude/settings.local.json`, kept out of git through `.git/info/exclude` | `.claude/settings.json` (commit it) |
-| `.agentkit/scripts/` | copied; leave it uncommitted for a trial | copied; commit it |
-| `pre-push` git hook | `.git/hooks/pre-push` (always local to the clone) | same |
-
-Both: `.gitattributes` gets `.agentkit/scripts/** text eol=lf`, so `core.autocrlf=true` never checks the scripts out with CRLF (bash fails on CR); after adding it to an existing repo run `git add --renormalize .agentkit/scripts`. Existing settings are **merged, never overwritten** (a hook already present is not added twice; a settings file that is not valid JSON is left untouched with exit 2 and a hint). An existing `pre-push` hook is kept: the kit's block is inserted after its shebang, and it hands git's ref lines on to the hook that follows. `.agentkit/coverage.xml` and `.coverage` are added to `.gitignore`. A header-only `FAILURES.md` is created if missing (with `merge=union`, like the decision log).
-
-`--guards` also merges `Read(...)` rules for `fs.deny_read` into `permissions.deny` of the same settings file (see [Reading protected files](#guard-rules)); rules you already have stay, and a second run adds nothing. Running it again on an older install adds the new `guard-fs.sh` hook and the deny rules once and leaves the existing hooks alone.
-
-**`merge.ff`:** the installer prints what `git config merge.ff false` does (it writes this clone's `.git/config` only, and makes every `git merge`/`git pull` in the clone create a merge commit instead of fast-forwarding, including `git pull` on a feature branch) and asks `[y/N]`. Without an interactive terminal it changes nothing and prints the command.
-
-The Claude Code hook JSON (`PreToolUse` → `hookSpecificOutput.permissionDecision: "ask"`, exit 2 to block, `.tool_input.command` / `.tool_input.file_path` on stdin) follows https://code.claude.com/docs/en/hooks. It has been checked against that page and by tests that feed the scripts hook-shaped JSON; it has not been exercised in a live Claude Code session.
-
-### Plan steps the scripts can read
-
-`writing-plans` now asks for this shape (`pl template` prints it; `pl check` enforces it; the old `## 1.` / Do / Done shape still parses and gets a WARN):
-
-```
-### Step N: <title>
-- Mode: solo | pipeline
-- Files: <path>, <path> (new)
-- Contract: <signatures, input/output, invariants>
-- Tests: <test_name>, <test_name>      # written before code; this is the definition of done
-- Out of scope: <what must not be touched>
-- Verify: <command>                     # optional
-```
-
-The plan lives at `pl path` (`notes/tasks/<branch>.plan.md`). The **active step** is the first unchecked item of the task note's `## Plan` checklist (the note `nt task --check N` already maintains; with everything ticked, the last step). There is no second marker. The scope check allows the files of steps 1 through the active one, so finished steps do not trip it and later steps' files do.
+`.agentkit/scripts/` is copied (commit it with `--team`); `.gitattributes` gets `.agentkit/scripts/** text eol=lf` (bash fails on CR; then `git add --renormalize .agentkit/scripts`). Existing settings are **merged, never overwritten**; an invalid-JSON settings file is left untouched with exit 2. An existing `pre-push` hook is kept (the kit's block goes after its shebang). `.agentkit/coverage.xml` and `.coverage` go into `.gitignore`. The installer prints what `git config merge.ff false` does and asks `[y/N]`; without a terminal it changes nothing. The Claude Code hook JSON follows https://code.claude.com/docs/en/hooks and is checked by tests that feed the scripts hook-shaped JSON; it has not been exercised in a live session.
 
 ### Configuration (guards)
 
-`.agentkit.json` → `guards` (plus the existing `git.protected_branches`, `git.protected_commit`, `notes.dir`, `notes.base_branch`). Every key is optional.
+`.agentkit.json` → `guards` and `fs` (plus `git.protected_branches`, `git.protected_commit`, `notes.dir`, `notes.base_branch`). Every key is optional.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `ruff` / `pytest` / `diff_cover` / `scope` | `true` | `false` skips that `verify.sh` stage (and `ruff-fix.sh` for `ruff`) |
-| `hook_stages` / `push_stages` | `null` (all) | Stages `verify.sh` runs from the Claude Code `Stop` hook (`--hook`) / from `pre-push` (`--push`), e.g. `["lint", "scope"]` and `["tests", "diff-cover"]`. Names: `lint`, `tests`, `diff-cover`, `scope`; an unknown name is an error. `verify.sh --stages a,b` overrides both; a plain `verify.sh` runs every enabled stage |
-| `ruff_cmd` / `pytest_cmd` / `diff_cover_cmd` | `ruff` / `pytest` / `diff-cover` | Command, split on spaces (e.g. `python -m pytest`); no quoting inside |
-| `pytest_args` | `""` | Extra pytest arguments, e.g. `--cov=src` |
-| `coverage_xml` | `.agentkit/coverage.xml` | Where the coverage report is written and read |
-| `fail_under` | `90` | Minimum coverage (%) of the changed lines |
-| `scope_ignore` | `null` (built-in) | Globs the scope check never reports; built-in: `.agentkit/*`, `.agentkit.json`, `<notes.dir>/*`, `FAILURES.md`, `.coverage*`, `coverage.xml` |
-| `merge_convention` | `null` | Free text shown in merge and push block messages |
-| `require_merge_commits` | `true` | `pre-push`: protected branches take merge commits only |
-| `verify_on_push` | `true` | `pre-push` also runs `verify.sh` |
-| `guards.destructive` | `ask` | What the destructive-command rules do: `ask`, `block` or `allow` (see [the rules](#guard-rules)); force pushes to protected branches are always blocked |
+| `hook_stages` / `push_stages` | `null` (all) | Stages run from the `Stop` hook / `pre-push`, e.g. `["lint", "scope"]` and `["tests", "diff-cover"]`; names: `lint`, `tests`, `diff-cover`, `scope` |
+| `ruff_cmd` / `pytest_cmd` / `diff_cover_cmd`, `pytest_args` | `ruff` / `pytest` / `diff-cover`, `""` | Commands (split on spaces) and extra pytest arguments |
+| `coverage_xml`, `fail_under` | `.agentkit/coverage.xml`, `90` | Coverage report path; minimum coverage (%) of the changed lines |
+| `scope_ignore` | `null` (built-in) | Globs the scope check never reports (built-in: `.agentkit/*`, `.agentkit.json`, `<notes.dir>/*`, `FAILURES.md`, `.coverage*`, `coverage.xml`) |
+| `merge_convention`, `require_merge_commits`, `verify_on_push` | `null`, `true`, `true` | Text shown in merge/push block messages; `pre-push` takes merge commits only; `pre-push` also runs `verify.sh` |
+| `guards.destructive` | `ask` | `ask`, `block` or `allow` for the destructive-command rules; force pushes to protected branches are always blocked |
 | `fs.outside_repo_write` | `ask` | Writing, editing or deleting a file outside the repo: `ask` or `block` |
-| `fs.allow_write` | `/tmp/**`, `~/.cache/**`, `{tmp}/**` | Outside-repo paths that are always writable (`{tmp}` = the OS scratch directory). `[]` allows none |
-| `fs.deny_read` | `~/.ssh/**`, `~/.aws/**`, `~/.config/gh/**`, `~/.gnupg/**`, `**/.env`, `**/.env.*`, `**/*.pem`, `**/id_rsa*` | Files no tool may read (Bash words are blocked; `permissions.deny` rules are installed) |
-| `fs.allow_read` | `**/.env.example`, `**/.env.sample`, `**/.env.template` | Exceptions to `fs.deny_read` |
-| `git.protected_branches` | `main, master, develop, release/*` | Branch globs the guards protect |
-| `git.protected_commit` | `ask` | For commits and pushes to a protected branch: `ask` (you approve), `allow`, `block` |
-| `notes.base_branch` | auto | The base for `diff-cover` and the scope check; auto = `origin/HEAD`, else the first existing protected branch |
+| `fs.allow_write` | `/tmp/**`, `~/.cache/**`, `{tmp}/**` | Outside-repo paths that are always writable |
+| `fs.deny_read`, `fs.allow_read` | `~/.ssh/**`, `~/.aws/**`, `**/.env`, `**/*.pem`, …; `**/.env.example`, … | Files no tool may read; exceptions to that |
+| `notes.base_branch` | auto | The base for `diff-cover` and the scope check (`origin/HEAD`, else the first existing protected branch) |
 
-**Opt out per stage**, for example a repo with no tests yet and no plan discipline:
+Opt out per stage, e.g. a repo with no tests yet: `{ "guards": { "pytest": false, "diff_cover": false, "scope": false } }`. To drop a whole guard, delete its entry from the hooks file or run `--uninstall-git-hooks` for `pre-push`.
 
-```json
-{ "guards": { "pytest": false, "diff_cover": false, "scope": false } }
-```
+### Failure log and known limits
 
-To drop a whole guard, delete its entry from the hooks file (`PreToolUse`/`PostToolUse`/`Stop`) or run `--uninstall-git-hooks` for `pre-push`. Setting `guards.require_merge_commits` and `guards.verify_on_push` to `false` keeps `pre-push` installed but idle.
+`FAILURES.md` records every mistake the agent made that you corrected: date, what happened, root cause, **the control that now prevents it**; `AGENTS.md` asks for a computational control (a script or hook) before a new instruction line.
 
-### Failure log
-
-`FAILURES.md` records every mistake the agent made that you corrected: date, what happened, root cause, **the control that now prevents it**. `AGENTS.md` makes it a rule for the agent, and asks for a computational control (a script or hook) before a new instruction line. It is separate from `notes/decisions.md`, which records what to build and is capped at 600 characters per entry.
-
-### Known limits
-
-- The guards read the command text; they are not a sandbox, and they catch mistakes, not a determined bypass. They do not follow aliases, shell functions, scripts, `git pull` (which can fast-forward), a variable set earlier in the same line (`d=/etc; rm -rf "$d"` is only caught because the variable is unresolved), the output of `$(...)`, `xargs` or `find -exec/-delete`, programs that write files themselves (`curl -o`, `tar -C`, `python -c`, editors), or `GIT_CONFIG_*` / `--config-env` for `core.hooksPath`. `vf || true` is not blocked (only `|` and `|&` are). `cd` inside `( ... )` is treated as moving the directory for the rest of the line. `pre-push` is the backstop for what reaches the remote. For OS-level enforcement use Claude Code's sandbox.
-- A `Read` deny rule from `fs.deny_read` covers Grep and Glob only best effort (Claude Code's own wording) and, for relative patterns, only under the project directory.
-- `verify.sh --hook` runs every enabled stage whenever Claude finishes a turn on a branch that differs from the base. Switch stages off, or scope `pytest_args`, for slow suites.
-- `ruff` runs on the whole repo (`.`), following the project's own ruff configuration.
-- The scope check needs a plan; a `/task` lite-path change has none and is skipped, with a note.
+- The guards read the command text; they are not a sandbox. They do not follow aliases, shell functions, scripts, `git pull` (which can fast-forward), the output of `$(...)`, `xargs` or `find -exec`, programs that write files themselves (`curl -o`, `tar -C`, `python -c`), or `GIT_CONFIG_*` / `--config-env` for `core.hooksPath`. `vf || true` is not blocked. `pre-push` is the backstop for what reaches the remote; for OS-level enforcement use Claude Code's sandbox.
+- `verify.sh --hook` runs every enabled stage whenever Claude finishes a turn on a branch that differs from the base; switch stages off for slow suites. The scope check needs a plan; a lite-path change has none and is skipped.
 
 ### Testing the kit itself
 
 ```bash
 bash scripts/test-kit.sh            # all bash tests; or: bash scripts/test-kit.sh guard-git
 python -m unittest scripts/tests/test_guard_py.py   # guard.py: tokenizer, rules, paths, wrappers
-python tools/fp_sweep.py            # every documented command through the guards: must print BLOCK=0 (--perf times the guard)
-python tools/selftest.py            # includes the installer and an end-to-end guard scenario (G1-G5)
+python tools/fp_sweep.py            # every documented command through the guards: must print BLOCK=0 ASK=0
+python tools/selftest.py            # installer, migration from a real 0.4.0 install, plan.py parity, guards
 ```
 
-The bash tests build throwaway git repos, put stub `ruff`/`pytest`/`diff-cover` first on `PATH`, and use real `git push` into a bare remote for `pre-push`. No bats needed. CI runs both on Ubuntu, Windows and macOS.
+CI runs them on Ubuntu, Windows and macOS (the selftest job checks out with full history so the `v0.4.0` tag exists). `tools/gen_shipped_hashes.py` regenerates `tools/shipped_hashes.json` (the hashes the installer compares removed skills against).
 
 ## Credits
 
-Patterns adapted from Anthropic's skill authoring best practices (progressive disclosure, degrees of freedom, utility scripts, validation loops), the `anthropics/skills` repository (SKILL.md format), `obra/superpowers` (plan-then-execute, verify before claiming done) and community commit skills (`awesome-copilot` conventional-commit, `principled-git-commit`).
+Patterns adapted from Anthropic's skill authoring best practices (progressive disclosure, degrees of freedom, utility scripts, validation loops), the `anthropics/skills` repository (SKILL.md format), `obra/superpowers` (plan-then-execute, verify before claiming done), Matt Pocock's "grill-me" (the design interview now inside writing-plans) and community commit skills.
