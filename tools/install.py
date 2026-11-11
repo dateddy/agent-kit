@@ -15,7 +15,7 @@
                                                         git hooks; any agent is gated, honours core.hooksPath. An existing
                                                         hook is kept; a marked block is inserted after its shebang.
   python tools/install.py <repo> --uninstall-git-hooks  remove only the marked blocks again
-  python tools/install.py <repo> --guards [--team]      computational guards (bash + git + jq): copies scripts/ to
+  python tools/install.py <repo> --guards [--team]      computational guards (bash + git + jq + python): copies scripts/ to
                                                         .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git,
                                                         PostToolUse ruff-fix, Stop verify) into .claude/settings.local.json
                                                         (--team: .claude/settings.json), adds a pre-push git hook block, and
@@ -46,7 +46,7 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
-GUARD_SCRIPTS = ("lib.sh", "guard-git.sh", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
+GUARD_SCRIPTS = ("lib.sh", "guard-git.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
 GUARD_IGNORE = (".agentkit/coverage.xml", ".coverage")  # written by verify.sh
 # bash fails on CR: with core.autocrlf=true git would check the scripts out with CRLF
 GUARD_EOL = ".agentkit/scripts/** text eol=lf"
@@ -332,7 +332,7 @@ def copy_guard_scripts(repo: Path) -> str:
         data = (KIT / "scripts" / name).read_bytes().replace(b"\r\n", b"\n")  # bash chokes on CR
         (dst / name).write_bytes(data)
         (dst / name).chmod((dst / name).stat().st_mode | 0o111)
-    return f"copy {dst} ({len(GUARD_SCRIPTS)} scripts; needs bash, git, jq)"
+    return f"copy {dst} ({len(GUARD_SCRIPTS)} scripts; needs bash, git, jq; guard-git runs on python)"
 
 
 def merge_settings(path: Path, wanted: dict) -> tuple[str, int]:
@@ -478,7 +478,7 @@ def main() -> int:
     ap.add_argument("--git-hooks", action="store_true", help="install pre-commit (scan) and commit-msg (lint-msg) git hooks")
     ap.add_argument("--uninstall-git-hooks", action="store_true", help="remove only the agent-kit blocks from git hooks")
     ap.add_argument("--guards", action="store_true",
-                    help="install the computational guards: scripts, Claude Code hooks, pre-push (needs bash, git, jq)")
+                    help="install the computational guards: scripts, Claude Code hooks, pre-push (needs bash, git, jq, python)")
     ap.add_argument("--team", action="store_true",
                     help="with --guards: write the Claude Code hooks to .claude/settings.json (shared) instead of "
                          "the uncommitted .claude/settings.local.json")

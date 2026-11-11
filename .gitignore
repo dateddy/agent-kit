@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .agentkit/logs/
 /bench/
+# agent task notes (personal)
+/notes/tasks/

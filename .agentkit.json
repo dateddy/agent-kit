@@ -1,7 +1,7 @@
 {
   "verify": {
     "test": "python tools/selftest.py",
-    "lint": null,
+    "lint": "ruff check .",
     "typecheck": null,
     "format": null
   }

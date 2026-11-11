@@ -24,7 +24,7 @@ jobs:
           shellcheck --version | grep -q 'version: 0.11.0'
           shellcheck --severity=warning scripts/*.sh scripts/pre-push scripts/tests/*.sh
       - name: ruff check (kit Python)
-        run: ruff check tools skills
+        run: ruff check tools skills scripts
 
   selftest:
     name: ${{ matrix.os }} / py${{ matrix.python }}
@@ -63,3 +63,6 @@ jobs:
       - name: Guard script tests (bash)
         shell: bash
         run: bash scripts/test-kit.sh
+      - name: Guard Python tests
+        shell: bash  # on Windows this puts Git's bash first on PATH, not the WSL launcher
+        run: python -m unittest scripts/tests/test_guard_py.py -v

@@ -11,8 +11,12 @@ No behaviour change.
 - A `lint` CI job (Ubuntu): `shellcheck --severity=warning` on `scripts/*.sh`, `scripts/pre-push` and `scripts/tests/*.sh`, and `ruff check tools skills`. The workflow now declares `permissions: contents: read`.
 - `ruff.toml`: rules `E`, `F`, `W`, line length 180 (the longest existing line is 179). Compact style (`E702`, `E741`, `E731`) is ignored on purpose; `ruff format` is not used here (FAILURES.md 2026-11-07).
 - `CHANGELOG.md`: the changelog moved out of the README.
+- `scripts/guard.py` (Python standard library, 3.9+): the logic of `guard-git.sh` ported one to one (quote-aware tokenizer, `bash -c`/`eval` up to three levels, `git -C`, switch/checkout tracking, merge/commit/push rules, `.agentkit.json` reading with the same defaults). Entry point `guard.py bash [COMMAND...]`; without arguments it reads the Claude Code hook JSON from stdin. `scripts/tests/test_guard_py.py` (unittest) covers it and runs in CI on every OS and Python version.
 
 **Changed**
+- `guard-git.sh` is now a thin wrapper that runs `guard.py`; same name, so hooks installed by `install.py --guards` and `templates/claude-hooks.json` keep working. Behaviour is unchanged: same exit codes, same messages, stdout carries only the "ask" JSON. The wrapper looks for `python3`, `python`, then `py -3` with `command -v` and skips the Microsoft Store `python3` stub (`*/WindowsApps/*`). With no python it fails like a missing `jq` did: stderr message, exit 2 in hook mode, 1 in argument mode.
+- `guard-git.sh` no longer needs `jq`. **`jq` is still required by the installer**: `verify.sh`, `pre-push` and `plan-step.sh` (and `lib.sh`, which they source) read `.agentkit.json` with it, so `install.py --guards` keeps refusing to run without it. The guards now also need Python 3.9+.
+- `install.py --guards` copies `guard.py` to `.agentkit/scripts/`; the existing `.agentkit/scripts/** text eol=lf` rule in `.gitattributes` covers it. The lint job also runs `ruff check scripts`.
 - Lint findings fixed in selftest, `exp.py` and `gitkit.py` (unused import and variable, duplicate imports, four scenario functions that shadowed others); intentional `shellcheck` findings carry a `disable` with a reason.
 - The unversioned "v3" changelog is now the historical section "pre-0.3 (internal v3)".
 
