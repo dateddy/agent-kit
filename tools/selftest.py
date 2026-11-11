@@ -135,7 +135,6 @@ Done when: `a.py` exits 0
 Out of scope: web
 
 ### Step 1: {VI}
-- Mode: solo
 - Files: a.py (new)
 - Contract: tạo a.py với hàm load()
 - Tests: test_load
@@ -380,7 +379,7 @@ def b2b(t: T):
 # ================================================================ B3 decisions in plans, /grill
 def plan_with(decisions: str) -> str:
     return ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n"
-            f"Decisions: {decisions}\n\n### Step 1: Add a\n- Mode: solo\n- Files: a.py (new)\n"
+            f"Decisions: {decisions}\n\n### Step 1: Add a\n- Files: a.py (new)\n"
             "- Contract: create a.py\n- Tests: test_a\n- Out of scope: none\n- Verify: python a.py\n")
 
 OLD_PLAN = ("# Plan: demo\nConstraints: none\nDone when: `a.py` exits 0\nOut of scope: none\n\n"
@@ -432,16 +431,18 @@ def dc3(t: T):
     check(code == 2 and second in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("DC4", "install copies the grilling-designs skill and /grill command")
+@scenario("DC4", "grill is part of writing-plans: no grilling-designs skill, no /grill command, a decision-tree reference")
 def dc4(t: T):
     d = t.repo()
     code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"install exit {code}: {out[:300]}")
-    check((d / ".agentkit/skills/grilling-designs/SKILL.md").is_file(), "skill not installed")
-    check((d / ".claude/commands/grill.md").is_file() and (d / ".claude/commands/task.md").is_file(),
-          "commands not installed")
-    text = (d / ".agentkit/skills/grilling-designs/SKILL.md").read_text(encoding="utf-8")
-    check("disable-model-invocation: true" in text, "frontmatter lost")
+    check(not (d / ".agentkit/skills/grilling-designs").exists(), "grilling-designs must not be installed")
+    check(not (d / ".claude/commands/grill.md").exists() and (d / ".claude/commands/task.md").is_file(),
+          "only /task is a command now")
+    tree = d / ".agentkit/skills/writing-plans/reference/decision-tree.md"
+    check(tree.is_file() and "nt decide" in tree.read_text(encoding="utf-8"), "decision-tree.md not installed")
+    skill = (d / ".agentkit/skills/writing-plans/SKILL.md").read_text(encoding="utf-8")
+    check(len(skill.splitlines()) <= 45 and "grill" not in skill.lower().replace("grill-me", ""), "SKILL.md too long or mentions /grill")
 
 
 # ================================================================ plan step format
@@ -453,23 +454,28 @@ def pl1(t: T):
     check(code == 2 and "old format" in out, f"exit {code}: {out[:300]}")
 
 
-@scenario("PL2", "plan check: new-format step needs Mode, Contract, Tests and Out of scope")
+@scenario("PL2", "plan check: new-format step needs Contract, Tests and Out of scope (Mode is not required)")
 def pl2(t: T):
     d = t.repo()
     bare = "# Plan: demo\nDone when: x exits 0\n\n### Step 1: Add a\n- Files: a.py (new)\n"
     t.write(d, {"plan.md": bare})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 1, f"exit {code}: {out[:300]}")
-    for field in ("Mode", "Contract", "Tests", "Out of scope"):
+    for field in ("Contract", "Tests", "Out of scope"):
         check(f"missing '{field}:'" in out, f"{field} not reported: {out[:300]}")
+    check("missing 'Mode:'" not in out, f"Mode must not be required: {out[:300]}")
 
 
-@scenario("PL3", "plan check: Mode must be solo or pipeline; 'no tests' WARNs")
-def pl3(t: T):
+@scenario("PL3", "plan check: a Mode line only WARNs 'Mode is ignored'; 'no tests' WARNs")
+def pl_check_mode_warns(t: T):
     d = t.repo()
-    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Mode: solo", "Mode: duo")})
+    t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
-    check(code == 1 and "Mode must be" in out, f"exit {code}: {out[:300]}")
+    check(code == 0 and "Mode" not in out, f"a plan without Mode is clean: exit {code}: {out[:300]}")
+    for mode in ("solo", "duo"):  # any value: nothing reads it
+        t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("- Files:", f"- Mode: {mode}\n- Files:")})
+        code, out = kit("pl", "check", "plan.md", cwd=d)
+        check(code == 2 and "Mode is ignored" in out and "BLOCK" not in out, f"Mode: {mode}: exit {code}: {out[:300]}")
     t.write(d, {"plan.md": plan_with("").replace("Decisions: \n", "").replace("Tests: test_a", "Tests: none")})
     code, out = kit("pl", "check", "plan.md", cwd=d)
     check(code == 2 and "no tests" in out, f"exit {code}: {out[:300]}")
@@ -684,7 +690,7 @@ def g5(t: T):
     check(code == 0, f"first push of main: {out[-300:]}")
     git(d, "switch", "-q", "-c", "feat/x")
     t.write(d, {
-        "notes/tasks/feat--x.plan.md": "# Plan: demo\nDone when: x\n\n### Step 1: edit a\n- Mode: solo\n- Files: a.py\n"
+        "notes/tasks/feat--x.plan.md": "# Plan: demo\nDone when: x\n\n### Step 1: edit a\n- Files: a.py\n"
                                        "- Contract: a stays\n- Tests: test_a\n- Out of scope: b.py\n",
         "notes/tasks/feat--x.md": "# Task: demo\n- branch: feat/x\n\n## Plan\n- [ ] 1. edit a\n",
         "a.py": "x = 2\n", "b.py": "y = 1\n"})
@@ -1115,7 +1121,7 @@ def listed_in_agents(d: Path) -> set:
 
 
 ALL_NOW = {"writing-plans", "keeping-notes", "verifying-changes", "economizing-context",
-           "debugging-systematically", "grilling-designs"}  # shrinks as 2a removes skills
+           "debugging-systematically"}
 
 
 @scenario("B4", "default install = every skill of the kit; AGENTS.md lists exactly the ones that have scripts")
@@ -1127,7 +1133,7 @@ def b4(t: T):
     claude_skills = {p.name for p in (d / ".claude" / "skills").iterdir()}
     check(claude_skills == ALL_NOW, f".claude/skills: {sorted(claude_skills)}")
     text = (d / "AGENTS.md").read_text(encoding="utf-8")
-    check(listed_in_agents(d) == ALL_NOW - {"grilling-designs"}, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
+    check(listed_in_agents(d) == ALL_NOW, f"AGENTS.md lists {sorted(listed_in_agents(d))}")
     check("<!--if" not in text and "`ex run" not in text, "conditional or removed-skill line leaked into AGENTS.md")
     code, out = kit("install", str(d), cwd=t.base)
     check(code == 0 and skills_in(d) == ALL_NOW, f"re-run changed the set: {sorted(skills_in(d))}")
@@ -1185,7 +1191,7 @@ def migrate_040_removes_unmodified(t: T):
     before = {p: (d / p).read_bytes() for p in USER_DATA}
     code, out = kit("install", str(d), cwd=t.base)
     check(code == 0, f"upgrade exit {code}: {out[-400:]}")
-    for gone in ("crafting-prompts", "tracking-experiments", "managing-git"):
+    for gone in ("crafting-prompts", "tracking-experiments", "managing-git", "grilling-designs"):
         shim = gone == "managing-git"  # a 0.4.0 git hook still points into it: only the loud shim stays
         check(not (d / ".agentkit/skills" / gone / "SKILL.md").exists(), f"{gone} still in .agentkit/skills")
         check((d / ".agentkit/skills" / gone).exists() == shim, f"{gone}: dir presence should be {shim}")
@@ -1193,6 +1199,7 @@ def migrate_040_removes_unmodified(t: T):
               f"{gone} still in .claude/skills")
         check(f"remove {d / '.agentkit/skills' / gone}" in out, f"no remove line for {gone}: {out[-400:]}")
     check((d / ".agentkit/skills/debugging-systematically/SKILL.md").is_file(), "debugging not installed")
+    check(not (d / ".claude/commands/grill.md").exists(), "the unmodified /grill command should be removed")
     for p, data in before.items():
         check((d / p).read_bytes() == data, f"user data changed: {p}")
 
@@ -1274,6 +1281,86 @@ def migrate_rerun_no_change(t: T):
     check(tree_snapshot(d) == first, "second run changed files: "
           f"{sorted(set(tree_snapshot(d).items()) ^ set(first.items()))[:4]}")
     check("remove " not in out, f"second run removed something: {out[-300:]}")
+
+
+# ================================================================ PF plan.py field vs the 0.4.0 plan-step.sh
+PARITY_PLAN = """# Plan: parity
+Constraints: none
+Done when: x
+
+### Step 1: First step
+- Mode: solo
+- Files: src/a.py, `src/b.py` (new), src/a.py
+  tests/t.py (NEW)
+- Contract: parse(s) -> int
+  invariant: positive
+- Tests: test_a, test_b
+- Out of scope: none
+- Verify: pytest -q
+
+### Step 2: Second: with a colon
+- Files: c.py (mới)
+- Contract: one
+- Contract: two replaces one
+  and continues
+- Tests: t
+- Out of scope: x
+
+## Notes
+Files: ignored.py
+
+### Step 3: Third
+- Files:
+- Tests: only
+
+  second line
+
+### Step 4: Tiếng Việt
+- Files: d.py, e.py (new)
+- Contract: tạo d.py
+- Tests: test_d
+- Out of scope: web
+
+## 5. Old style
+Files: old.py
+Do: change it
+Verify: t
+Done: ok
+"""
+PARITY_NOTE = ("# Task: parity\n- branch: main\n\n## Plan\n- [x] 1. First\n- [ ] 2. Second\n- [ ] 3. Third\n"
+               "- [ ] 4. VN\n- [ ] 5. Old\n\n## Log\n- [ ] 9. not a plan item\n")
+
+
+def capture(cmd: list, cwd: Path) -> tuple[int, str, str]:
+    p = subprocess.run([str(c) for c in cmd], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
+                       env=child_env(), timeout=300, stdin=subprocess.DEVNULL)
+    return p.returncode, p.stdout, p.stderr
+
+
+@scenario("PF1", "plan.py field behind plan-step.sh gives the 0.4.0 awk's stdout, stderr and exit code, case by case")
+def plan_field_parity(t: T):
+    old = old_kit(t) / "scripts" / "plan-step.sh"
+    new = KIT / "scripts" / "plan-step.sh"
+    d = t.repo("pf", files={"notes/tasks/main.plan.md": PARITY_PLAN, "notes/tasks/main.md": PARITY_NOTE})
+    t.write(d, {"crlf.plan.md": PARITY_PLAN.replace("\n", "\r\n")})
+    fields = ("title", "mode", "files", "contract", "tests", "out-of-scope", "verify", "do", "done", "colour")
+    arg_sets = ([], ["--cumulative"], ["--step", "2"], ["--step", "2", "--cumulative"], ["--step", "4", "--cumulative"],
+                ["--step", "9"], ["--step", "0", "--cumulative"], ["--step", "x"], ["--step", "5"],
+                ["--plan", "crlf.plan.md", "--step", "2"], ["--plan", "missing.md", "--step", "1"],
+                ["--note", "missing-note.md"], ["--step"], ["--bogus"])
+    n = 0
+    for fld in fields:
+        for args in arg_sets:
+            want, got = capture(["bash", old, fld, *args], d), capture(["bash", new, fld, *args], d)
+            check(want == got, f"plan-step.sh {fld} {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
+            n += 1
+    for args in ([], ["files", "--note", "notes/tasks/main.md"]):
+        want, got = capture(["bash", old, *args], d), capture(["bash", new, *args], d)
+        check(want == got, f"plan-step.sh {' '.join(args)}\n  0.4.0: {want!r}\n  now:   {got!r}")
+    git(d, "switch", "-q", "--detach")  # detached HEAD without --plan/--note
+    want, got = capture(["bash", old, "files"], d), capture(["bash", new, "files"], d)
+    check(want == got and want[0] == 1, f"detached HEAD\n  0.4.0: {want!r}\n  now:   {got!r}")
+    check(n == len(fields) * len(arg_sets), "case count")
 
 
 # ================================================================ D bench harness (fake claude only)

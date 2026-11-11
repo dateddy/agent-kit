@@ -6,13 +6,14 @@
   plan.py check [FILE]                      validate (default FILE = current branch's plan)
   plan.py apply [FILE]                      check, then load steps into the keeping-notes task note
   plan.py step N [FILE]                     print only step N (+ constraints) for the executor
+  plan.py field NAME [--cumulative] [--step N] [--plan FILE] [--note FILE]
+                                            one field of the active step (what scripts/plan-step.sh calls)
 
 Plan file format (markdown):
   # Plan: <goal>
   Constraints: <...>          Done when: <...>          Out of scope: <...>
   Decisions: D-012, D-013     (optional; ids must exist in notes/decisions.md)
   ### Step 1: <step title>
-  - Mode: solo | pipeline
   - Files: src/a.py, tests/test_a.py (new)
   - Contract: <signatures, input/output, invariants; may span lines>
   - Tests: test_a_ok, test_a_empty      (written before the code: the definition of done)
@@ -37,9 +38,8 @@ from pathlib import Path
 OK, BLOCK, WARN = 0, 1, 2
 STEP_FIELDS = ("Files", "Do", "Verify", "Done")  # old format: all required
 NEW_FIELDS = ("Mode", "Files", "Contract", "Tests", "Out of scope", "Verify")  # Verify is optional
-NEW_REQUIRED = ("Mode", "Files", "Contract", "Tests", "Out of scope")
+NEW_REQUIRED = ("Files", "Contract", "Tests", "Out of scope")  # Mode is still parsed, never required (it is ignored)
 ALL_STEP_FIELDS = tuple(dict.fromkeys(STEP_FIELDS + NEW_FIELDS))
-MODES = ("solo", "pipeline")
 HEAD_FIELDS = ("Constraints", "Done when", "Out of scope", "Decisions")
 STEP_NEW = re.compile(r"^###\s+Step\s+(\d+)\s*:\s*(.*)$")
 STEP_OLD = re.compile(r"^##\s+(\d+)\.\s*(.*)$")
@@ -199,9 +199,8 @@ def check_plan(path: Path, r: Path) -> tuple[int, dict | None]:
             if not s[f].strip():
                 errs.append(f"{tag}: missing '{f}:'")
         if not old:
-            mode = s["Mode"].strip().lower()
-            if mode and mode not in MODES:
-                errs.append(f"{tag}: Mode must be 'solo' or 'pipeline', got '{s['Mode'].strip()}'")
+            if s["Mode"].strip():
+                warns.append(f"{tag}: Mode is ignored (nothing reads it) — delete the 'Mode:' line")
             if s["Tests"].strip() and NO_TESTS.fullmatch(s["Tests"].strip()):
                 warns.append(f"{tag}: no tests — name the tests that define done, or say in Contract why none apply")
         for fp, new in split_files(s["Files"]):
@@ -234,7 +233,7 @@ def cmd_template(a, r):
     out = [f"# Plan: {a.goal or '<one-line outcome>'}", "Constraints: <what must not change / required tech>",
            "Done when: <observable result for the whole task>", "Out of scope: <deferred work>", ""]
     for i in range(1, n + 1):
-        out += [f"### Step {i}: <step title>", "- Mode: solo | pipeline", "- Files: <path>, <path> (new)",
+        out += [f"### Step {i}: <step title>", "- Files: <path>, <path> (new)",
                 "- Contract: <signatures, input/output, invariants>",
                 "- Tests: <test_name>, <test_name>",
                 "- Out of scope: <what must not be touched>",
@@ -295,8 +294,142 @@ def cmd_step(a, r):
         if plan["head"].get(k):
             print(f"{k}: {plan['head'][k]}")
     for f in (STEP_FIELDS if s["fmt"] == "old" else NEW_FIELDS):
+        if f == "Mode":
+            continue
         if s[f] or f in STEP_FIELDS or f in NEW_REQUIRED:
             print(f"{f}: {s[f]}")
+    return OK
+
+
+# ---------------------------------------------------------------- field (what scripts/plan-step.sh prints)
+# A line-for-line port of the awk in plan-step.sh of 0.4.0, so the output and the exit codes stay identical:
+# it reads "### Step N: title" + "- Field: value" bullets and the old "## N. title" + "Field: value" form; a
+# continuation line extends the current field; a repeated field replaces the earlier value.
+FIELD_NAMES = ("title", "mode", "files", "contract", "tests", "out-of-scope", "verify", "do", "done")
+H_STEP_NEW = re.compile(r"^###[ \t]+Step[ \t]+[0-9]+[ \t]*:")
+H_STEP_OLD = re.compile(r"^##[ \t]+[0-9]+\.")
+H_FIELD = re.compile(r"^(- )?(Mode|Files|Contract|Tests|Out of scope|Verify|Do|Done):")
+SPACE = " \t\n\r\f\v"
+
+
+def field_values(text: str, want: list[str], fld: str) -> tuple[list[str], list[str]]:
+    """(values, problems): the field `fld` of each wanted step in order; problems are the stderr lines."""
+    ok = set(want)
+    seen: set[int] = set()
+    has: set[int] = set()
+    val: dict[int, str] = {}
+    step, field = 0, ""
+    for line in text.replace("\r", "").split("\n"):
+        if H_STEP_NEW.match(line):
+            s = re.sub(r"^###[ \t]+Step[ \t]+", "", line)
+            step = int(re.sub(r"[ \t]*:.*", "", s, count=1))
+            seen.add(step)
+            field = ""
+            if str(step) in ok and fld == "title":
+                val[step] = re.sub(r"^[0-9]+[ \t]*:[ \t]*", "", s, count=1)
+                has.add(step)
+        elif H_STEP_OLD.match(line):
+            s = re.sub(r"^##[ \t]+", "", line)
+            step = int(re.sub(r"\..*", "", s, count=1))
+            seen.add(step)
+            field = ""
+            if str(step) in ok and fld == "title":
+                val[step] = re.sub(r"^[0-9]+\.[ \t]*", "", s, count=1)
+                has.add(step)
+        elif line.startswith("#"):
+            step, field = 0, ""
+        elif step == 0:
+            continue
+        elif H_FIELD.match(line):
+            s = re.sub(r"^- ", "", line)
+            field = re.sub(r":.*", "", s, count=1).lower().replace(" ", "-")
+            if str(step) in ok and field == fld:
+                val[step] = re.sub(r"[ \t]+$", "", re.sub(r"^[^:]*:[ \t]*", "", s, count=1))
+                has.add(step)
+        elif not line.strip(" \t"):
+            continue
+        elif field and str(step) in ok and field == fld:
+            val[step] = val.get(step, "") + "\n" + line.strip(" \t")
+    values: list[str] = []
+    problems: list[str] = []
+    for w in want:
+        n = int(w)
+        if n not in seen:
+            problems.append(f"step {n} not found in the plan")
+        elif n not in has:
+            problems.append(f'step {n} has no "{fld}" field')
+        else:
+            values.append(val[n])
+    return values, problems
+
+
+def active_step(note_text: str) -> str:
+    """First unchecked item of the note's `## Plan` checklist, else the last item, else ""."""
+    sec, first, last = "", "", ""
+    for line in note_text.split("\n"):
+        if line.startswith("## "):
+            sec = line[3:].lower()
+        elif sec == "plan" and re.match(r"^- \[[ x]\] [0-9]+\.", line):
+            n = re.sub(r"\..*", "", re.sub(r"^- \[[ x]\] ", "", line), count=1)
+            last = n
+            if line[3:4] != "x" and not first:
+                first = n
+    return first or last
+
+
+def files_lines(raw: str) -> list[str]:
+    """`files` output: one path per line, backticks and a trailing (new) removed, no blanks, no duplicates."""
+    out: list[str] = []
+    for line in raw.replace(",", "\n").split("\n"):
+        line = line.replace("`", "")
+        line = re.sub(r"[ \t\r\f\v]*\((?:new|NEW|New|mới)\)[ \t\r\f\v]*$", "", line)
+        line = line.strip(SPACE)
+        if line and line not in out:
+            out.append(line)
+    return out
+
+
+def cmd_field(a, r) -> int:
+    """Exit 0 value printed, 1 error; the value goes to stdout, every diagnostic to stderr."""
+    def fail(msg: str) -> int:
+        print(msg, file=sys.stderr)
+        return BLOCK
+
+    fld = a.name
+    if fld not in FIELD_NAMES:
+        return fail(f"unknown field '{fld}'. Use: title mode files contract tests out-of-scope verify")
+    step = a.step or ""
+    if step and not (step.isascii() and step.isdigit()):
+        return fail(f"--step needs a number, got '{step}'")
+    plan, note = a.plan, a.note
+    if plan is None or note is None:
+        branch = sh("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+        if not branch:
+            return fail("detached HEAD: pass --plan and --note, or switch to the task branch")
+        base = notes_dir(r) / "tasks" / slug(branch)
+        plan = plan if plan is not None else base.as_posix() + ".plan.md"
+        note = note if note is not None else base.as_posix() + ".md"
+    if not Path(plan).is_file():
+        return fail(f"no plan at {plan}. Save the accepted plan there (pl path), then run pl apply.")
+    if not step:
+        if not Path(note).is_file():
+            return fail(f"no task note at {note}, so the active step is unknown. Run pl apply, or pass --step N.")
+        with open(note, encoding="utf-8", errors="surrogateescape", newline="") as f:
+            step = active_step(f.read())
+        if not step:
+            return fail(f"task note {note} has no plan checklist. Run pl apply, or pass --step N.")
+    want = [str(i) for i in range(1, int(step) + 1)] if a.cumulative else [step]
+    text = Path(plan).read_bytes().decode("utf-8", "surrogateescape")
+    values, problems = field_values(text, want, fld)
+    if problems:
+        for p in problems:
+            print(p, file=sys.stderr)
+        return BLOCK
+    raw = "".join(v + "\n" for v in values).rstrip("\n")  # what the shell's $(...) kept
+    out = "".join(line + "\n" for line in files_lines(raw)) if fld == "files" else raw + "\n"
+    sys.stdout.flush()
+    sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
+    sys.stdout.buffer.flush()
     return OK
 
 
@@ -315,9 +448,19 @@ def main() -> int:
     s = sp.add_parser("check"); s.add_argument("file", nargs="?")
     s = sp.add_parser("apply"); s.add_argument("file", nargs="?")
     s = sp.add_parser("step"); s.add_argument("n", type=int); s.add_argument("file", nargs="?")
+    s = sp.add_parser("field", description="print one field of the active step (stdout), diagnostics to stderr; exit 0 or 1")
+    s.add_argument("name"); s.add_argument("--step"); s.add_argument("--cumulative", action="store_true")
+    s.add_argument("--plan"); s.add_argument("--note")
+    field_parser = s
+
+    def field_usage_error(msg: str):  # argparse would exit 2; `field` has one failure code, 1 (like plan-step.sh)
+        print(f"plan.py field: {msg}\n{field_parser.format_usage()}", file=sys.stderr)
+        sys.exit(BLOCK)
+    field_parser.error = field_usage_error
     a = ap.parse_args()
     r = root()
-    return {"template": cmd_template, "path": cmd_path, "check": cmd_check, "apply": cmd_apply, "step": cmd_step}[a.cmd](a, r)
+    return {"template": cmd_template, "path": cmd_path, "check": cmd_check, "apply": cmd_apply, "step": cmd_step,
+            "field": cmd_field}[a.cmd](a, r)
 
 
 if __name__ == "__main__":
