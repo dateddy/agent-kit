@@ -8,7 +8,7 @@ It is built around three goals:
 - **Engineering over judgment.** Anything that has a rule (commit format, branch policy, secrets, plan completeness, test results) is decided by a Python script, not by the model.
 - **Automate the repetitive parts.** Starting tasks, planning, committing, verifying, tracking experiments, writing prompts.
 
-All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#13-guards-scripts-that-always-run-v030) (v0.3.0, `scripts/`) are bash and need `bash`, `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
+All skill scripts are Python 3.9+ standard library only (PyYAML optional for YAML configs). Git ≥ 2.38 is recommended for merge-conflict prediction. The optional [guards](#13-guards-scripts-that-always-run-v030) (`scripts/`) are bash wrappers around one Python script (`guard.py`): the `PreToolUse` guards need `bash` and Python 3.9+, `verify.sh`, `pre-push` and the installer also need `git` and `jq`; Python tools (`ruff`, `pytest`, `pytest-cov`, `diff-cover`) are used only when present and configured.
 
 ---
 
@@ -50,7 +50,8 @@ agent-kit/
 │   ├── economizing-context/   repo map, import-graph zones, capped command runner (repomap.py, run.py)
 │   ├── tracking-experiments/  (optional) training/eval run log tied to git commits (exp.py)
 │   └── crafting-prompts/      (optional) prompts for a target model from a spec, with tests (promptkit.py)
-├── scripts/                   guards (bash + git + jq): guard-git.sh, verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh,
+├── scripts/                   guards (bash + python; verify.sh and pre-push also git + jq): guard.py, guard-git.sh, guard-fs.sh, py.sh,
+│                              verify.sh, pre-push, plan-step.sh, ruff-fix.sh, lib.sh,
 │                              test-kit.sh + tests/
 ├── templates/                 AGENTS.md, AGENTS.rules-only.md, CLAUDE.md, commands/task.md, commands/grill.md, claude-hooks.json
 ├── tools/                     install.py, validate_skills.py, selftest.py, bench/ (benchmark harness)
@@ -79,10 +80,10 @@ git clone <this repo> agent-kit
 python agent-kit/tools/install.py path/to/your-project                       # the five core skills
 python agent-kit/tools/install.py path/to/your-project --with experiments,prompts   # plus optional skills
 python agent-kit/tools/install.py path/to/your-project --git-hooks           # plus enforcement by git hooks
-python agent-kit/tools/install.py path/to/your-project --guards              # plus the bash guards (needs jq)
+python agent-kit/tools/install.py path/to/your-project --guards              # plus the guards (needs bash, python, jq)
 ```
 
-**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. See [Guards](#13-guards-scripts-that-always-run-v030).
+**Prerequisites:** Python 3.9+ and git for the skills. The `--guards` also need `bash` and **`jq`** on bash's PATH (check: `bash -c 'command -v jq'`); the installer refuses `--guards` without them. (The `PreToolUse` guards themselves, `guard-git.sh` and `guard-fs.sh`, run on Python and need no `jq`; `verify.sh`, `pre-push` and `plan-step.sh` do.) See [Guards](#13-guards-scripts-that-always-run-v030).
 
 **Core and optional skills.** The default install is small on purpose: every installed skill costs its description in every session.
 
@@ -683,7 +684,7 @@ The selftest runs all of this against a fake `claude` on `PATH` that emits canne
 
 Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards are plain bash scripts in `scripts/` that **always run and can block**. Claude Code hooks and git hooks are thin wrappers that only call them, so the same checks work with any agent, or with none (a human at a terminal).
 
-**Requirements:** `bash`, `git`, `jq` (on Windows: Git for Windows' bash). `jq` is a hard prerequisite: every guard reads `.agentkit.json` with it, and without it the `PreToolUse` hook would block every Bash call, so `install.py --guards` checks `bash -c 'command -v jq'` first and exits 1 without writing anything when it is missing. Install it with `winget install jqlang.jq` (Windows; winget may not put it on PATH: copy `jq.exe` into `~/bin` or add its folder to PATH), `brew install jq` (macOS) or `sudo apt install jq` (Debian/Ubuntu). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
+**Requirements:** `bash`, `git`, Python 3.9+ and `jq` (on Windows: Git for Windows' bash). The two `PreToolUse` guards (`guard-git.sh`, `guard-fs.sh`) are thin wrappers around `guard.py` (standard library only) and need no `jq`; `py.sh` finds the interpreter (python3, python, `py -3`; the Microsoft Store `python3` stub is skipped) and without Python they fail loudly (exit 2) instead of letting everything through. `jq` stays a hard prerequisite of the rest: `verify.sh`, `pre-push` and `plan-step.sh` read `.agentkit.json` with it (through `lib.sh`), so `install.py --guards` checks `bash -c 'command -v jq'` first and exits 1 without writing anything when it is missing. Install it with `winget install jqlang.jq` (Windows; winget may not put it on PATH: copy `jq.exe` into `~/bin` or add its folder to PATH), `brew install jq` (macOS) or `sudo apt install jq` (Debian/Ubuntu). `ruff`, `pytest` + `pytest-cov` and `diff-cover` are needed only for the stages that use them; a stage whose tool is missing **fails with an install-or-disable message**, it never passes silently.
 
 **Two real failures these exist for** (details and the control for each: [FAILURES.md](FAILURES.md)):
 
@@ -691,17 +692,42 @@ Rules in `AGENTS.md` and `SKILL.md` are advice the model can ignore. The guards 
 |---|---|
 | The agent fast-forwarded a stage branch into `main`; the repo convention is a `--no-ff` merge commit | `guard-git.sh` blocks the command and prints how to inspect the convention; `pre-push` rejects the push even if the agent got around the hook; managing-git has a mandatory pre-merge `git log --first-parent --merges -5` |
 | Code drifted from the plan; transformations shipped untested or weakly tested | Plan steps are machine-readable; `verify.sh` fails on files outside the plan and on uncovered changed lines |
+| The agent piped `vf` into `tail` and a failing step was committed (the pipe hides the exit code) | `guard-git.sh` blocks `verify.py`, `vf` and `verify.sh` piped into another command; a redirect to a file passes |
+| A hook rewrote a file in another project | `ruff-fix.sh` leaves files of other repos alone; `guard-fs.sh` and `guard-git.sh` ask before the agent writes, edits or deletes a file outside the repo |
 
 ### What each script does
 
 | Script | Runs from | Behavior |
 |---|---|---|
-| `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | On a protected branch: **blocks** `git merge` without `--no-ff`, any `--ff-only`, any `--squash` (`--abort/--continue/--quit` pass). A `git commit`, or a push that targets a protected branch, returns `permissionDecision: "ask"` so you approve. Follows `git switch/checkout` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes and `bash -c`. The block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
+| `guard-git.sh` | Claude Code `PreToolUse` (matcher `Bash`), or by hand: `guard-git.sh git merge --ff-only x` | Judges a shell command with `guard.py bash`; the rules are in [the table below](#guard-rules). Follows `git switch/checkout` and `cd` earlier in the same command line, `&&`/`;`/`\|`, `git -C`, env prefixes, `bash -c` and `eval` (three levels). The merge block message carries the convention and `git log --first-parent --merges -5 <branch> --oneline` |
+| `guard-fs.sh` | Claude Code `PreToolUse` (matcher `Edit\|Write\|MultiEdit\|NotebookEdit`), or by hand: `guard-fs.sh path/to/file` | Judges the file about to change with `guard.py edit`. In the repo (or a worktree of it) passes; outside it `fs.allow_write` passes and everything else follows `fs.outside_repo_write` (ask or block). The message prints the absolute path, after `~`, `$HOME`, relative paths (from the hook's `cwd`), `..`, symlinks (also for a file that does not exist yet), drive letters and `/c/…` are resolved |
+| `guard.py` | the two wrappers above | The logic: tokenizer, rules, path resolution. Standard library, Python 3.9+. `guard.py bash [COMMAND…]` and `guard.py edit [PATH]`; with no argument both read the Claude Code hook JSON from stdin (and use its `cwd`) |
+| `py.sh` | sourced by the wrappers; `install.py` copies its `ak_find_py` function into the git hooks | The one place that finds Python: python3, python, `py -3`; the Microsoft Store stub (`*/WindowsApps/*`) is skipped |
 | `pre-push` | git (any agent, or none) | For a push to a protected branch every commit on the pushed range's **first-parent line** must be a merge commit (≥ 2 parents), so a fast-forwarded feature branch is refused. Handles a new branch on the remote; deletes and tags are not judged; the first push to a remote with no branches is let through. Then runs `verify.sh` |
 | `verify.sh` | Claude Code `Stop` (`--hook`), `pre-push` (`--push`), by hand | The single "is this done?" gate, see below; `--stages`, `guards.hook_stages` and `guards.push_stages` pick which stages run per caller |
 | `plan-step.sh <field>` | `verify.sh`, the agent | Prints a field of the active plan step (`title mode files contract tests out-of-scope verify`); `--cumulative` for steps 1..active; a missing field, step or plan is an error |
 | `ruff-fix.sh` | Claude Code `PostToolUse` (matcher `Edit\|Write`) | `ruff check --fix` and `ruff format` on the edited `.py` file only, and only when it belongs to this repository (a file in another repo or outside any repo is left alone); anything else is a no-op. Problems it cannot fix are shown to the agent |
 | `lib.sh` | sourced | Config reading (`jq` on `.agentkit.json`), protected-branch matching, base branch, slug |
+
+<a id="guard-rules"></a>**Rules of `guard-git.sh` and `guard-fs.sh`** (all in `guard.py`; tests: `scripts/tests/test_guard_py.py`, `test_guard_git.sh`). A rule answers allow, **ask** (Claude Code shows its permission prompt) or **BLOCK**; the first BLOCK wins, then the first ask. Set `AGENTKIT_HEADLESS=1` for runs nobody watches (`claude -p`, CI): every ask then becomes a BLOCK that says so. The guard never guesses that it is headless.
+
+| Rule | Decision | Setting |
+|---|---|---|
+| `git merge` on a protected branch without `--no-ff`, with `--ff-only` or `--squash` | BLOCK | `git.protected_branches` |
+| commit on, or push to, a protected branch | ask | `git.protected_commit` (`ask`/`allow`/`block`) |
+| `--no-verify`; `-n` on `git commit` only (on `push` it is a dry run and passes); `git -c core.hooksPath=…` (key in any case); `git config … core.hooksPath` (reading or unsetting it passes) | BLOCK | |
+| force push (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, a `+` refspec) to a protected branch | BLOCK | |
+| force push to a branch that is not protected | ask | `guards.destructive` |
+| `reset --hard\|--merge\|--keep`, `branch -D` or `-d --force`, `clean -f` (not with `-n`), `stash drop\|clear`, `checkout -- <path>` or `checkout .`, `restore` without `--staged`, `push --delete` or `:branch`, `filter-branch`, `filter-repo`, `update-ref -d`, `reflog expire`, `gc --prune=now` | ask | `guards.destructive` (`ask`/`block`/`allow`) |
+| `verify.py`, `vf` or `verify.sh` piped (`\|`, `\|&`) into another command (the exit code is lost); `> log` and `\|\|` pass | BLOCK | |
+| Edit/Write/MultiEdit/NotebookEdit of a file outside the repo | ask | `fs.outside_repo_write` (`ask`/`block`), `fs.allow_write` |
+| in Bash: `rm`, `rmdir`, `mv`, `cp` (destination), `ln`, `touch`, `mkdir`, `chmod`, `chown`, `truncate`, `tee`, `dd of=`, `install`, `sed -i`, `perl -i`, and the redirects `>` `>>` `2>` `&>` with a target outside the repo (`/dev/null`, `/dev/stdout`, `/dev/stderr` always pass) | same as the line above | `fs.outside_repo_write`, `fs.allow_write` |
+| `rm`, `mv`, `truncate`, `dd`, `sed -i`, `perl -i` or `>` whose target holds a variable the guard cannot resolve (`rm -rf $BUILD_DIR`), or is relative to a `cd` it lost track of | ask | `guards.destructive` |
+| any word of a Bash command that resolves to a file matching `fs.deny_read` (`cat ~/.ssh/id_rsa`, `git add .env`), unless `fs.allow_read` matches | BLOCK | `fs.deny_read`, `fs.allow_read` |
+
+**What "the repo" is.** The git work tree around the hook's working directory, plus every worktree of the same repository (same `git rev-parse --git-common-dir`). A path is resolved first: `~` and `$HOME`, a relative path from the hook's `cwd` (and, in Bash, from the last literal `cd`), `..`, symlinks (the nearest existing directory is resolved, so a new file below a link that points out of the repo is outside), the drive letter and case on Windows, and Git Bash's `/c/Users/…`. Outside any repository the working directory counts as the project root.
+
+**Reading protected files.** `fs.deny_read` is enforced twice. `guard.py bash` blocks any word that resolves to a matching file. `install.py --guards` also adds one `Read(...)` rule per pattern to `permissions.deny` of the Claude Code settings file that holds the hooks (merged: your own rules stay, nothing is added twice). From the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions): a `Read` deny rule is applied, best effort, to the built-in tools that read files, so Grep and Glob are covered, and it also stops Edit and Write on that path; rules use gitignore syntax (`~/x/**` from home, `//x` absolute, a relative pattern such as `**/.env` matches under the project directory only); deny beats allow, and the only exception is a `Read(!pattern)` rule listed after the rule it carves out, in the same file and for relative patterns only, which is how `fs.allow_read` (`**/.env.example` …) is installed. Consequences: an `.env` outside the project directory is stopped by the Bash guard but not by the Read tool rule, and an `fs.allow_read` pattern that starts with `~` or `/` is honoured by `guard.py` only (the installer says so). No hook is used for Read/Grep/Glob: it would add about 0.4 s to every read.
 
 **`verify.sh` stages, in order** (each can be switched off, see [Configuration](#configuration-guards)):
 
@@ -725,6 +751,7 @@ It prints a compact summary to stderr, the failing stage's key lines, and `VERDI
 |---|---|---|
 | `guard-git.sh` from hook JSON on stdin | Claude Code hook | **exit 2** (stderr goes to the model). Exit 1 would *not* block. "Ask" = JSON on stdout, exit 0 |
 | `guard-git.sh` with the command as arguments | kit / git | exit 1; "ask" JSON on stdout, exit 0 |
+| `guard-fs.sh` from hook JSON on stdin / with a path as argument | Claude Code hook / kit | same as `guard-git.sh`: exit 2 / exit 1 to block, "ask" JSON on stdout, exit 0 |
 | `verify.sh` | CLI; `--hook` = Claude Code `Stop` hook | exit 1 by default, **exit 2 with `--hook`** (keeps the agent working), but never when the hook input has `stop_hook_active: true` (see [hook mode](#verify-hook-mode)). With `--hook`, nothing changed against the base branch exits 0 at once |
 | `ruff-fix.sh` | Claude Code `PostToolUse` hook | exit 2 shows stderr to the agent (the edit already happened) |
 | `pre-push`, `plan-step.sh` | git hook / CLI | any non-zero |
@@ -746,6 +773,8 @@ python agent-kit/tools/install.py path/to/repo --uninstall-git-hooks   # also re
 | `pre-push` git hook | `.git/hooks/pre-push` (always local to the clone) | same |
 
 Both: `.gitattributes` gets `.agentkit/scripts/** text eol=lf`, so `core.autocrlf=true` never checks the scripts out with CRLF (bash fails on CR); after adding it to an existing repo run `git add --renormalize .agentkit/scripts`. Existing settings are **merged, never overwritten** (a hook already present is not added twice; a settings file that is not valid JSON is left untouched with exit 2 and a hint). An existing `pre-push` hook is kept: the kit's block is inserted after its shebang, and it hands git's ref lines on to the hook that follows. `.agentkit/coverage.xml` and `.coverage` are added to `.gitignore`. A header-only `FAILURES.md` is created if missing (with `merge=union`, like the decision log).
+
+`--guards` also merges `Read(...)` rules for `fs.deny_read` into `permissions.deny` of the same settings file (see [Reading protected files](#guard-rules)); rules you already have stay, and a second run adds nothing. Running it again on an older install adds the new `guard-fs.sh` hook and the deny rules once and leaves the existing hooks alone.
 
 **`merge.ff`:** the installer prints what `git config merge.ff false` does (it writes this clone's `.git/config` only, and makes every `git merge`/`git pull` in the clone create a merge commit instead of fast-forwarding, including `git pull` on a feature branch) and asks `[y/N]`. Without an interactive terminal it changes nothing and prints the command.
 
@@ -783,6 +812,11 @@ The plan lives at `pl path` (`notes/tasks/<branch>.plan.md`). The **active step*
 | `merge_convention` | `null` | Free text shown in merge and push block messages |
 | `require_merge_commits` | `true` | `pre-push`: protected branches take merge commits only |
 | `verify_on_push` | `true` | `pre-push` also runs `verify.sh` |
+| `guards.destructive` | `ask` | What the destructive-command rules do: `ask`, `block` or `allow` (see [the rules](#guard-rules)); force pushes to protected branches are always blocked |
+| `fs.outside_repo_write` | `ask` | Writing, editing or deleting a file outside the repo: `ask` or `block` |
+| `fs.allow_write` | `/tmp/**`, `~/.cache/**`, `{tmp}/**` | Outside-repo paths that are always writable (`{tmp}` = the OS scratch directory). `[]` allows none |
+| `fs.deny_read` | `~/.ssh/**`, `~/.aws/**`, `~/.config/gh/**`, `~/.gnupg/**`, `**/.env`, `**/.env.*`, `**/*.pem`, `**/id_rsa*` | Files no tool may read (Bash words are blocked; `permissions.deny` rules are installed) |
+| `fs.allow_read` | `**/.env.example`, `**/.env.sample`, `**/.env.template` | Exceptions to `fs.deny_read` |
 | `git.protected_branches` | `main, master, develop, release/*` | Branch globs the guards protect |
 | `git.protected_commit` | `ask` | For commits and pushes to a protected branch: `ask` (you approve), `allow`, `block` |
 | `notes.base_branch` | auto | The base for `diff-cover` and the scope check; auto = `origin/HEAD`, else the first existing protected branch |
@@ -801,7 +835,8 @@ To drop a whole guard, delete its entry from the hooks file (`PreToolUse`/`PostT
 
 ### Known limits
 
-- `guard-git.sh` reads the command text; it is not a sandbox. It does not follow aliases, scripts, shell expansion or `git pull` (which can fast-forward). `pre-push` is the backstop for what reaches the remote.
+- The guards read the command text; they are not a sandbox, and they catch mistakes, not a determined bypass. They do not follow aliases, shell functions, scripts, `git pull` (which can fast-forward), a variable set earlier in the same line (`d=/etc; rm -rf "$d"` is only caught because the variable is unresolved), the output of `$(...)`, `xargs` or `find -exec/-delete`, programs that write files themselves (`curl -o`, `tar -C`, `python -c`, editors), or `GIT_CONFIG_*` / `--config-env` for `core.hooksPath`. `vf || true` is not blocked (only `|` and `|&` are). `cd` inside `( ... )` is treated as moving the directory for the rest of the line. `pre-push` is the backstop for what reaches the remote. For OS-level enforcement use Claude Code's sandbox.
+- A `Read` deny rule from `fs.deny_read` covers Grep and Glob only best effort (Claude Code's own wording) and, for relative patterns, only under the project directory.
 - `verify.sh --hook` runs every enabled stage whenever Claude finishes a turn on a branch that differs from the base. Switch stages off, or scope `pytest_args`, for slow suites.
 - `ruff` runs on the whole repo (`.`), following the project's own ruff configuration.
 - The scope check needs a plan; a `/task` lite-path change has none and is skipped, with a note.
@@ -810,6 +845,8 @@ To drop a whole guard, delete its entry from the hooks file (`PreToolUse`/`PostT
 
 ```bash
 bash scripts/test-kit.sh            # all bash tests; or: bash scripts/test-kit.sh guard-git
+python -m unittest scripts/tests/test_guard_py.py   # guard.py: tokenizer, rules, paths, wrappers
+python tools/fp_sweep.py            # every documented command through the guards: must print BLOCK=0 (--perf times the guard)
 python tools/selftest.py            # includes the installer and an end-to-end guard scenario (G1-G5)
 ```
 

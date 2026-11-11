@@ -114,10 +114,15 @@ t_protected_commit_policy() {
 
 t_push_to_protected_asks() {
   git switch -q -c feat/x
-  for c in "git push origin HEAD:main" "git push origin feat/x:main" "git push origin +main" "git push --force origin main" \
+  for c in "git push origin HEAD:main" "git push origin feat/x:main" \
            "git push --all origin" "git push origin --delete main"; do
     arg $c
     assert_eq ask "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecision // empty')" "ask for: $c"
+  done
+  # force pushes to a protected branch are blocked outright since 1b (D-4b60); they used to ask
+  for c in "git push origin +main" "git push --force origin main"; do
+    arg $c
+    assert_blocked_arg
   done
   git switch -q main
   arg git push

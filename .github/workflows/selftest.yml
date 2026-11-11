@@ -66,3 +66,5 @@ jobs:
       - name: Guard Python tests
         shell: bash  # on Windows this puts Git's bash first on PATH, not the WSL launcher
         run: python -m unittest scripts/tests/test_guard_py.py -v
+      - name: False-positive sweep (docs commands through the guards)
+        run: python tools/fp_sweep.py

@@ -16,8 +16,9 @@
                                                         hook is kept; a marked block is inserted after its shebang.
   python tools/install.py <repo> --uninstall-git-hooks  remove only the marked blocks again
   python tools/install.py <repo> --guards [--team]      computational guards (bash + git + jq + python): copies scripts/ to
-                                                        .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git,
-                                                        PostToolUse ruff-fix, Stop verify) into .claude/settings.local.json
+                                                        .agentkit/scripts, merges Claude Code hooks (PreToolUse guard-git and
+                                                        guard-fs, PostToolUse ruff-fix, Stop verify) and permissions.deny Read
+                                                        rules (from fs.deny_read) into .claude/settings.local.json
                                                         (--team: .claude/settings.json), adds a pre-push git hook block, and
                                                         offers `git config merge.ff false` after printing its effect;
                                                         exits 1 before writing anything if bash cannot find jq
@@ -33,6 +34,7 @@ Project install does:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -46,7 +48,7 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
-GUARD_SCRIPTS = ("lib.sh", "guard-git.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
+GUARD_SCRIPTS = ("lib.sh", "py.sh", "guard-git.sh", "guard-fs.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
 GUARD_IGNORE = (".agentkit/coverage.xml", ".coverage")  # written by verify.sh
 # bash fails on CR: with core.autocrlf=true git would check the scripts out with CRLF
 GUARD_EOL = ".agentkit/scripts/** text eol=lf"
@@ -168,19 +170,29 @@ SH_SHEBANG = re.compile(r"^#!\s*(\S*/)?(env\s+)?(ba|da|z|k)?sh\b")
 BLOCK_RE = re.compile(re.escape(HOOK_MARK) + r".*?" + re.escape(HOOK_END) + r"\n?", re.S)
 
 
+PY_FN_BEGIN = "# >>> ak_find_py"
+PY_FN_END = "# <<< ak_find_py"
+
+
+def find_py_function() -> list[str]:
+    """Lines of the POSIX function ak_find_py of scripts/py.sh (between its markers): the one interpreter finder."""
+    lines = (KIT / "scripts" / "py.sh").read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")
+    return lines[lines.index(PY_FN_BEGIN) + 1:lines.index(PY_FN_END)]
+
+
 def hook_block(name: str) -> str:
     """POSIX sh that BLOCKs only on gitkit exit 1 (WARN passes) and never calls `exit 0`."""
-    py = shlex.quote(Path(sys.executable).as_posix())
+    pref = shlex.quote(Path(sys.executable).as_posix())
     return "\n".join([
         HOOK_BEGIN,
-        f"ak_py={py}",
+        *find_py_function(),
+        f"ak_pref={pref}",
         'ak_gk="$(git rev-parse --show-toplevel)/.agentkit/skills/managing-git/scripts/gitkit.py"',
         "ak_run() {",
-        '  if [ -x "$ak_py" ]; then "$ak_py" "$@"',
-        '  elif command -v python3 >/dev/null 2>&1; then python3 "$@"',
-        '  elif command -v python >/dev/null 2>&1; then python "$@"',
-        '  elif command -v py >/dev/null 2>&1; then py -3 "$@"',
-        '  else echo "agent-kit: python not found — secret scan and commit lint SKIPPED" >&2; return 0; fi',
+        '  if [ -x "$ak_pref" ]; then "$ak_pref" "$@"',
+        "  elif ak_find_py; then",
+        '    if [ -n "$ak_py_args" ]; then "$ak_py" "$ak_py_args" "$@"; else "$ak_py" "$@"; fi',
+        '  else echo "agent-kit: python not found \u2014 secret scan and commit lint SKIPPED" >&2; return 0; fi',
         "}",
         "ak_rc=0",
         'if [ -f "$ak_gk" ]; then',
@@ -362,6 +374,65 @@ def merge_settings(path: Path, wanted: dict) -> tuple[str, int]:
     return f"hook {path} ({', '.join(added)} -> .agentkit/scripts)", 0
 
 
+def load_guard():
+    """scripts/guard.py of this kit as a module (the fs.* defaults and the config reader live there)."""
+    spec = importlib.util.spec_from_file_location("agentkit_guard", KIT / "scripts" / "guard.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def perm_pattern(p: str) -> str:
+    """An fs.* glob as a Claude Code Read() pattern (gitignore syntax): `//path` is absolute, `/path` would be project-relative,
+    `~/` and relative patterns (**/.env) are kept. Windows C:/x is written //c/x (docs: permissions, Read and Edit)."""
+    m = re.match(r"^([A-Za-z]):[/\\](.*)$", p)
+    if m:
+        return f"//{m.group(1).lower()}/{m.group(2)}"
+    return "/" + p if p.startswith("/") and not p.startswith("//") else p
+
+
+def read_deny_rules(repo: Path) -> tuple[list[str], list[str]]:
+    """(Read() rules for permissions.deny, notes) from fs.deny_read / fs.allow_read of <repo>/.agentkit.json (else the defaults).
+
+    allow_read becomes `Read(!pattern)`: a deny rule starting with ! carves paths out of the rules listed before it in the
+    same file, but only out of relative ones (not `~/` or `//`), so other allow_read patterns stay enforced by guard.py only.
+    """
+    g = load_guard()
+    try:
+        data = json.loads((repo / ".agentkit.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        data = None
+    cfg = g.Config(data if isinstance(data, dict) else None)
+    rules = [f"Read({perm_pattern(p)})" for p in cfg.cfg_list("fs.deny_read", g.FS_DENY_READ)]
+    notes = []
+    for p in cfg.cfg_list("fs.allow_read", g.FS_ALLOW_READ):
+        if p.startswith(("~", "/", "{")) or re.match(r"^[A-Za-z]:", p):
+            notes.append(f"note: fs.allow_read '{p}' cannot be a Claude Code ! carve-out (only relative patterns can); the Read tool stays blocked there")
+        else:
+            rules.append(f"Read(!{p})")
+    return rules, notes
+
+
+def merge_permissions(path: Path, rules: list[str]) -> tuple[str, int]:
+    """Append the rules that are missing to permissions.deny of a Claude Code settings file; nothing existing is touched."""
+    manual = "add to permissions.deny by hand: " + ", ".join(rules)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError as e:
+        return f"WARN {path} is not valid JSON ({e}) — left untouched; {manual}", 2
+    perms = data.get("permissions", {}) if isinstance(data, dict) else None
+    if not isinstance(perms, dict) or not isinstance(perms.get("deny", []), list):
+        return f"WARN {path} has an unexpected permissions layout — left untouched; {manual}", 2
+    deny = data.setdefault("permissions", {}).setdefault("deny", [])
+    add = [r for r in rules if r not in deny]
+    if not add:
+        return f"keep {path} (permissions.deny already has the fs.deny_read rules)", 0
+    deny.extend(add)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    return f"permissions {path} (+{len(add)} Read rules in permissions.deny from fs.deny_read)", 0
+
+
 def append_lines(path: Path, lines: tuple | list) -> list:
     """Append the lines that are not in the file yet; returns the ones added."""
     text = read_raw(path) if path.exists() else ""
@@ -429,6 +500,12 @@ def install_guards(repo: Path, team: bool, ask=None) -> int:
     msg, c = merge_settings(settings, wanted)
     print(msg)
     code = max(code, c)
+    rules, notes = read_deny_rules(repo)
+    msg, c = merge_permissions(settings, rules)
+    print(msg)
+    code = max(code, c)
+    for note in notes:
+        print(note)
     if not team:  # personal trial: keep the file out of git without touching the shared .gitignore
         excl = git_out(repo, "rev-parse", "--git-path", "info/exclude")
         if excl:

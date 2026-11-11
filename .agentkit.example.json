@@ -67,12 +67,26 @@
     "hook_stages": null,
     "_push_stages": "stages verify.sh runs from pre-push (--push); null = all. verify.sh --stages a,b overrides both",
     "push_stages": null,
+    "_destructive": "ask | block | allow: what happens on git reset --hard, branch -D, clean -f, stash drop, checkout -- <path>, restore, push --delete, filter-branch, update-ref -d, reflog expire, gc --prune=now, force push to an unprotected branch, and on rm/mv/truncate/dd/sed -i whose target holds an unresolved variable. A force push to a protected branch is always blocked",
+    "destructive": "ask",
     "_merge_convention": "free text shown in merge/push block messages, e.g. \"merge commit named feat(<scope>): merge X\"",
     "merge_convention": null,
     "_require_merge_commits": "pre-push: every first-parent commit pushed to a protected branch must be a merge commit",
     "require_merge_commits": true,
     "_verify_on_push": "pre-push also runs verify.sh",
     "verify_on_push": true
+  },
+
+  "fs": {
+    "_comment": "Files outside the repo, read by scripts/guard.py (PreToolUse guard-fs.sh for Edit/Write/NotebookEdit and guard-git.sh for Bash). The repo is the git work tree around the working directory plus every worktree that shares its .git. Patterns are globs ({tmp} = the OS scratch dir, ~ = home, ** crosses directories; a relative pattern is taken from the repo root). An explicit empty list [] means none; omit a key for its default",
+    "_outside_repo_write": "ask | block: what happens when the agent writes, edits or deletes a file outside the repo (Edit/Write tools, rm, mv, cp target, redirects > >> 2> &>, sed -i, tee ...) and the path is not in allow_write. The message shows the absolute path. AGENTKIT_HEADLESS=1 turns every ask into a block",
+    "outside_repo_write": "ask",
+    "_allow_write": "paths outside the repo that are always writable (scratch space and caches)",
+    "allow_write": ["/tmp/**", "~/.cache/**", "{tmp}/**"],
+    "_deny_read": "files no tool may read: a Bash command with any word naming one is blocked, and install.py --guards adds them as Read() rules to permissions.deny of the Claude Code settings (Claude Code applies a Read deny rule to Grep and Glob too, best effort)",
+    "deny_read": ["~/.ssh/**", "~/.aws/**", "~/.config/gh/**", "~/.gnupg/**", "**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"],
+    "_allow_read": "exceptions to deny_read (templates people commit on purpose); written as Read(!pattern) carve-outs, which Claude Code honours only for relative patterns",
+    "allow_read": ["**/.env.example", "**/.env.sample", "**/.env.template"]
   },
 
   "experiments": {
