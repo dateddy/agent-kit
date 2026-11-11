@@ -42,3 +42,8 @@ Entry format:
 - What happened: while implementing step 1a of the guard.py port, the agent ran `vf` piped into `tail`. The pipeline's exit status is the one of `tail`, so a failing verification looked like success and the step was committed (b1266ab, later amended). AGENTS.md already said "never pipe vf".
 - Root cause: the rule existed only as an instruction; nothing checked the command, and the VERDICT line was cut off together with the exit code.
 - Control: `scripts/guard.py` (`guard_verify_pipe`, reached through the `PreToolUse` hook `guard-git.sh`) blocks `verify.py`, `vf` and `verify.sh` piped with `|` or `|&` into another command; redirecting to a file passes. Tests: `test_verify_pipe_table` in `scripts/tests/test_guard_py.py`.
+
+## 2026-11-11 · Step ticked before its done criterion was met
+- What happened: in 2a, step 8 was ticked with `nt task --check 8` before CI was green; the done criterion ("CI green") was still unproven when the task note said 8/8.
+- Root cause: `nt task --check` only flips a checkbox; nothing compares it with a verify verdict, so a tick is a claim, not evidence.
+- Control: `nt task --check N` BLOCKs unless `verify.py` recorded a full-mode PASS for the current tree (`.agentkit/state/verify.json`); `--force --why "<reason>"` bypasses it and logs the reason in the task log; `nt task --uncheck N` undoes a tick (2b step 4, `skills/keeping-notes/scripts/notes.py`, `scripts/tests/test_notes_gate.py`). A CI-green criterion stays a Verify line of the step until `pl check` gates it (step 3, out of scope for 2b).

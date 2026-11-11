@@ -122,3 +122,63 @@ Why: Docs: project-enabled plugins still need a per-machine install.
 ## D-cbd4 · 2026-11-11 · slim-k · refactor/slim-down
 Tag v0.4.0 on the 1b merge cd4c178.
 Why: Migration hashes of shipped files need a reproducible reference.
+
+## D-4b92 · 2026-11-12 · 2b-q1 · refactor/verify-engine
+Single engine scripts/verify.py; skill verifying-changes deleted; AGENTS keeps 3 lines on verify.
+Why: Hooks enforce the verdict.
+
+## D-364a · 2026-11-12 · 2b-q2 · refactor/verify-engine
+One verify config block; old guards.* and verify.* keys still read for one version with WARN deprecated.
+Why: cascade-lad uses both.
+
+## D-a67b · 2026-11-12 · 2b-q3 · refactor/verify-engine
+Affected tests at Stop chosen by rmap import graph (stdlib); pytest-testmon later.
+Why: No new dependency.
+
+## D-54c8 · 2026-11-12 · 2b-q4 · refactor/verify-engine
+Integrity (deleted test, skip/xfail, lost assert) blocks Stop once with a list; agent must tell the user; stop_hook_active respected.
+Why: Avoid stop loops.
+
+## D-aa99 · 2026-11-12 · 2b-q5 · refactor/verify-engine
+Git hooks call a copy in <git-common-dir>/agentkit/ placed by the installer; config read from working-tree .agentkit.json, defaults if missing.
+Why: Branches older than the kit install can commit.
+
+## D-a2a8 · 2026-11-12 · 2b-q6 · refactor/verify-engine
+Kit's own Stop runs test-kit + fast unit tests; full selftest only at pre-push and CI.
+Why: Selftest takes >100 s.
+
+## D-59f3 · 2026-11-12 · 2b-q7 · refactor/verify-engine
+nt task --check BLOCKs unless verify recorded a full PASS for the current tree; --force --why logs the reason; nt task --uncheck added.
+Why: Control for 2a step 8 ticked before CI green.
+
+## D-5983 · 2026-11-12 · 2b-q8 · refactor/verify-engine
+pre-push ported to Python (prepush.py); jq and lib.sh removed from runtime; test_pre_push.sh must pass unchanged.
+Why: One implementation, no jq.
+
+## D-0afe · 2026-11-12 · 2b-a · refactor/verify-engine
+format is its own stage; guards.ruff=false disables lint and format; summary format and argv stay those of verify.sh.
+Why: test_verify.sh pins them.
+
+## D-4ca6 · 2026-11-12 · 2b-b · refactor/verify-engine
+verify.<stage> = auto|command string|false plus tool cmds, hook_stages, push_stages, fail_under, coverage_xml, scope_ignore; new keys win; verify.test maps to tests.
+Why: Two old schemas must both run.
+
+## D-24fa · 2026-11-12 · 2b-c · refactor/verify-engine
+Integrity diffs base...HEAD plus worktree; each finding blocks Stop once then is acked by hash in state; CLI exit 2; push only reports.
+Why: diff HEAD misses committed weakening.
+
+## D-9901 · 2026-11-12 · 2b-d · refactor/verify-engine
+Only a full-mode PASS (CLI or --push) on the current tree key unlocks nt task --check; key ignores scope_ignore paths.
+Why: Notes edits must not invalidate the key.
+
+## D-53be · 2026-11-12 · 2b-e · refactor/verify-engine
+Stage cache key adds argv and tool path+mtime; --no-cache and AK_VERIFY_NO_CACHE=1 disable it.
+Why: Env-driven stubs are invisible to the tree key.
+
+## D-560d · 2026-11-12 · 2b-f · refactor/verify-engine
+Stop default stages: lint(changed), tests(affected, no --cov), integrity, scope; explicit hook_stages honoured as-is.
+Why: Keeps cascade-lad on lint+scope.
+
+## D-3c57 · 2026-11-12 · scope · refactor/verify-engine
+tools/selftest.py: step 1 test for the dbg hint (DB4 asserts no promptkit) lives in selftest; file not listed in step 1 Files. tools/bench/perf.py: edit case restores the file it reformats.
+Why: Plan said selftest or an existing dbg test file; selftest holds the DB scenarios.

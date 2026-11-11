@@ -267,7 +267,7 @@ def cmd_llm_case(a, r, c):
     spec.setdefault("cases", []).append({"vars": vars_, "checks": checks, "source": a.id})
     spec_path.write_bytes((json.dumps(spec, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     append(journal(r, c), {"id": a.id, "event": "llm-case", "spec": spec_path.as_posix()})
-    msg = f"OK: case {len(spec['cases'])} added to {a.spec} from {a.id}. Run: promptkit.py test {a.spec} --case {len(spec['cases'])}"
+    msg = f"OK: case {len(spec['cases'])} added to {a.spec} from {a.id}. Replay case {len(spec['cases'])} of {a.spec} with your own LLM runner."
     print(msg)
     if b["layer"] != "llm":
         print(f"WARN: {a.id} is a {b['layer']} bug, not an llm bug")

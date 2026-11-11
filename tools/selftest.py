@@ -765,6 +765,7 @@ def b4d(t: T):
     code, out = kit("dbg", "llm-case", bid, "--spec", "prompts/qa.spec.json",
                     "--vars", '{"question": "How much is it?"}', "--check", '{"type":"not_contains","value":"$"}', cwd=d)
     check(code == 0, f"llm-case: exit {code}: {out[:200]}")
+    check("promptkit" not in out, f"hint names a removed tool: {out[:300]}")
     got = json.loads((d / "prompts/qa.spec.json").read_text(encoding="utf-8"))
     check(got["cases"] == [{"vars": {"question": "How much is it?"},
                             "checks": [{"type": "not_contains", "value": "$"}], "source": bid}], f"cases: {got['cases']}")
