@@ -186,3 +186,19 @@ Why: Plan said selftest or an existing dbg test file; selftest holds the DB scen
 ## D-fa10 · 2026-11-12 · scope · refactor/verify-engine
 Step 2 also touches skills/writing-plans/scripts/plan.py (active_step ignores a trailing CR: task notes written by nt on Windows are CRLF, so plan.py field found no checklist and the scope stage failed) and tools/install.py (GUARD_SCRIPTS gains akcore.py and verify.py, which verify.sh now needs; the rest of the installer work stays in step 5).
 Why: vf must exit 0 on the kit itself after step 2; both are latent from 0.5.0 / forced by the new wrapper.
+
+## D-f4b8 · 2026-11-12 · 2b-h · refactor/verify-engine
+akcore.py holds only helpers shared by scripts: config load + defaults + legacy key folding, repo root and git-common-dir, git runner, in_repo, tool lookup and process run, utf8 stdio. No stage or rule logic: default_ignores, changed_files, RUFF_EXCLUDE and the stage switch names live in verify.py. guard.py does NOT use akcore yet (own git runner, RepoInfo.in_repo, resolve_path with symlink and worktree handling); test_guard_py.py needs no change. Moving guard.py onto akcore goes to BACKLOG.
+Why: Keep the shared module small and stable; guard.py is already tested and covers more path cases.
+
+## D-c0a1 · 2026-11-12 · 2b-i · refactor/verify-engine
+Worktree ak-baseline (the v0.5.0 checkout used for the baseline perf) stays until the step 8 measurements, then git worktree remove; the AUDIT notes it.
+Why: perf.py --root needs the v0.5.0 tree for the before/after table.
+
+## D-293a · 2026-11-12 · scope · refactor/verify-engine
+2b fixup touches: .github/workflows/selftest.yml (clean-tree step), tools/gen_shipped_hashes.py (--help must not write; LF), tools/bench/perf.py, .gitignore, .claude/settings.json (new: deny Bash(ruff format:*)), FAILURES.md, scripts/akcore.py, scripts/verify.py, scripts/tests/test_verify_py.py.
+Why: Requested by the user after step 2.
+
+## D-dcde · 2026-11-12 · 2b-g · refactor/verify-engine
+Stage defaults follow the 0.5.0 skill for every stage incl. diff_cover: "auto" (default) runs when the tool exists, else SKIP with a one-line note; true, a custom command string or an explicitly set tool key (ruff_cmd, pytest_cmd, diff_cover_cmd) = required: missing tool FAILs; false/null = off. Missing coverage report: SKIP under auto, FAIL when required. test_verify.sh t_missing_* set the tool keys, so they hold unchanged.
+Why: User asked for the skill's semantics; explicit tool keys reconcile the two old tests without editing them.

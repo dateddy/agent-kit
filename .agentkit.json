@@ -3,7 +3,6 @@
     "tests": "python tools/selftest.py",
     "lint": "ruff check .",
     "format": null,
-    "typecheck": null,
-    "diff_cover": false
+    "typecheck": null
   }
 }

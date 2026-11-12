@@ -195,6 +195,86 @@ class EditModeTests(VerifyCase):
         self.assertEqual(self.run_v("--edit", stdin="not json")[0], 0)
 
 
+class AutoToolTests(VerifyCase):
+    """"auto" (the default) runs a stage when its tool exists and SKIPs it when not; true or an explicit tool key means
+    required (FAIL when missing); false / null switch it off. Applies to every stage, diff-cover included."""
+
+    def path_with(self, *tools):
+        """A PATH holding only python, git, bash and the named stubs: no other ruff / pytest / diff-cover can be found."""
+        d = Path(tempfile.mkdtemp(dir=self.tmp))
+        for t in tools:
+            shutil.copy(self.bin / t, d / t)
+        dirs = [d, Path(sys.executable).parent, Path(shutil.which("git")).parent]
+        if akcore.find_bash():
+            dirs.append(Path(akcore.find_bash()).parent)
+        return os.pathsep.join(str(x) for x in dict.fromkeys(dirs))
+
+    def changed(self):
+        self.branch()
+        self.commit("src/a.py")
+
+    def test_repo_without_diff_cover_passes_with_a_skip(self):
+        self.changed()
+        rc, out, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+        self.assertEqual((rc, out), (0, ""), err)
+        self.assertRegex(err, r"diff-cover  SKIP  diff-cover not found \(auto")
+        self.assertIn("VERDICT: PASS (exit 0)", err)
+        self.assertIn("pytest --cov", self.calls())
+
+    def test_true_makes_a_missing_tool_a_failure(self):
+        self.changed()
+        self.cfg({"verify": {"diff_cover": True}})
+        rc, _, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+        self.assertEqual(rc, 1, err)
+        self.assertIn("diff-cover  FAIL", err)
+        self.assertIn("diff-cover not found: install it, or set verify.diff_cover to false", err)
+
+    def test_every_missing_tool_is_a_skip_under_auto(self):
+        self.changed()
+        rc, _, err = self.run_v(env={"PATH": self.path_with()})
+        self.assertEqual(rc, 0, err)
+        for stage in ("lint", "tests", "diff-cover"):
+            self.assertRegex(err, stage + r"\s+SKIP\s+\S+ not found \(auto")
+
+    def test_an_explicit_tool_key_is_required(self):
+        self.changed()
+        for cfg, stage in (({"verify": {"ruff_cmd": "no-such-ruff"}}, "lint"), ({"verify": {"pytest_cmd": "no-such-pytest"}}, "tests"),
+                           ({"guards": {"diff_cover_cmd": "no-such-dc"}}, "diff-cover")):
+            self.cfg(cfg)
+            rc, _, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+            self.assertEqual(rc, 1, err)
+            self.assertRegex(err, stage + r"\s+FAIL")
+
+    def test_missing_coverage_report_skips_under_auto_and_fails_when_required(self):
+        self.changed()
+        self.cfg({"verify": {"tests": False}})
+        rc, _, err = self.run_v()
+        self.assertEqual(rc, 0, err)
+        self.assertRegex(err, r"diff-cover  SKIP  no coverage report")
+        self.cfg({"verify": {"tests": False, "diff_cover": True}})
+        rc, _, err = self.run_v()
+        self.assertEqual(rc, 1, err)
+        self.assertIn("is missing: diff-cover needs the coverage report", err)
+
+    def test_false_and_null_switch_a_stage_off(self):
+        self.changed()
+        self.cfg({"verify": {"diff_cover": False, "lint": None}})
+        rc, _, err = self.run_v()
+        self.assertEqual(rc, 0, err)
+        self.assertIn("diff-cover  SKIP  disabled: verify.diff_cover=false", err)
+        self.assertIn("lint        SKIP  disabled: verify.lint=null", err)
+
+    def test_edit_without_ruff_is_silent_under_auto_and_loud_when_required(self):
+        (self.repo / "m.py").write_text("x=1\n", encoding="utf-8")
+        payload = json.dumps({"tool_input": {"file_path": str(self.repo / "m.py")}})
+        env = {"PATH": self.path_with()}
+        self.assertEqual(self.run_v("--edit", stdin=payload, env=env)[0], 0)
+        self.cfg({"verify": {"lint": True}})
+        rc, _, err = self.run_v("--edit", stdin=payload, env=env)
+        self.assertEqual(rc, 2)
+        self.assertIn("ruff not found", err)
+
+
 class ConfigTests(VerifyCase):
     def test_legacy_keys_warn_and_apply(self):
         self.branch()

@@ -160,6 +160,12 @@ class Cfg:
             return g[old]
         return default
 
+    def explicit(self, key: str) -> bool:
+        """The user set verify.<key> (or its 0.5.0 guards key) to a value: they asked for that tool."""
+        v, g = self.section("verify"), self.section("guards")
+        old = LEGACY_GUARDS.get(key)
+        return v.get(key) is not None or bool(old and g.get(old) is not None)
+
     def is_null(self, key: str) -> bool:
         """verify.<key> is an explicit JSON null: the 0.5.0 skill's way to switch a format/lint/typecheck/tests gate off."""
         v = self.section("verify")

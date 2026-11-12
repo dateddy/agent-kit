@@ -121,11 +121,26 @@ def custom_cmd(ctx: Ctx, stage: str) -> str | None:
     return raw.strip() if isinstance(raw, str) and raw.strip() and raw.strip().lower() != "auto" else None
 
 
-def missing_tool(ctx: Ctx, tool: str, stage: str) -> Res | None:
+def required(cfg: ak.Cfg, stage: str, tool_key: str = "") -> bool:
+    """A missing tool FAILs the stage (instead of SKIP) when the user asked for it: verify.<stage> is true, or the tool
+    command key (ruff_cmd, pytest_cmd, diff_cover_cmd) is set. The default, "auto", skips what is not installed."""
+    return cfg.verify(KEY.get(stage, stage), "auto") is True or bool(tool_key and cfg.explicit(tool_key))
+
+
+def missing_tool(ctx: Ctx, tool: str, stage: str, tool_key: str = "") -> Res | None:
     if ak.resolve_exe(tool) or ak.has_tool(tool):
         return None
-    return Res("FAIL", detail=f"{tool} not found: install it, or set {ctx.cfg.switch_name(stage)} to false in "
-                              ".agentkit.json to skip this stage")
+    if required(ctx.cfg, stage, tool_key):
+        return Res("FAIL", detail=f"{tool} not found: install it, or set {ctx.cfg.switch_name(stage)} to false in "
+                                  ".agentkit.json to skip this stage")
+    return Res("SKIP", f"{tool} not found (auto; set {ctx.cfg.switch_name(stage)} to true to require it)")
+
+
+def run_detected(ctx: Ctx, stage: str, cmd: str) -> Res:
+    """A command found by detect(): the project configures that tool, but it may not be installed here."""
+    if not required(ctx.cfg, stage) and not ak.has_tool(cmd.split()[0]):
+        return Res("SKIP", f"{cmd.split()[0]} not found (auto; set {ctx.cfg.switch_name(stage)} to true to require it)")
+    return run_shell_stage(ctx, stage, cmd)
 
 
 def write_log(ctx: Ctx, stage: str, text: str) -> None:
@@ -258,16 +273,18 @@ def format_with_lint(ctx: Ctx) -> bool:
 
 def stage_ruff(ctx: Ctx, stage: str) -> Res:
     """lint = ruff check (+ ruff format --check); format = a formatter other than ruff, or ruff format --check alone."""
-    cmd = custom_cmd(ctx, stage) or (ctx.detected.get(stage) or ("",))[0]
+    cmd = custom_cmd(ctx, stage)
     if cmd:
         return run_shell_stage(ctx, stage, cmd)
+    if ctx.detected.get(stage):
+        return run_detected(ctx, stage, ctx.detected[stage][0])
     if stage == "format" and "lint" in ctx.selected and disabled(ctx, "lint") is None and not custom_cmd(ctx, "lint"):
         return Res("SKIP", "checked with lint")
     targets = ctx.py_targets()
     if targets is None:
         return Res("SKIP", "no changed python files")
     argv = ruff_argv(ctx, stage, targets)
-    miss = missing_tool(ctx, argv[0].split()[0], stage)
+    miss = missing_tool(ctx, argv[0].split()[0], stage, "ruff_cmd")
     if miss:
         return miss
     rc, out = ak.run_argv(argv, ctx.root)
@@ -278,14 +295,20 @@ def stage_ruff(ctx: Ctx, stage: str) -> Res:
 
 
 def stage_typecheck(ctx: Ctx) -> Res:
-    cmd = custom_cmd(ctx, "typecheck") or (ctx.detected.get("typecheck") or ("",))[0]
-    if not cmd:
-        return Res("SKIP", "none configured")
-    return run_shell_stage(ctx, "typecheck", cmd)
+    cmd = custom_cmd(ctx, "typecheck")
+    if cmd:
+        return run_shell_stage(ctx, "typecheck", cmd)
+    if ctx.detected.get("typecheck"):
+        return run_detected(ctx, "typecheck", ctx.detected["typecheck"][0])
+    return Res("SKIP", "none configured")
 
 
 def stage_tests(ctx: Ctx) -> Res:
-    cmd = custom_cmd(ctx, "tests") or (ctx.detected.get("tests") or ("",))[0]
+    cmd = custom_cmd(ctx, "tests")
+    detected = (ctx.detected.get("tests") or ("",))[0] if not cmd else ""
+    if detected and not required(ctx.cfg, "tests") and not ak.has_tool(detected.split()[0]):
+        return Res("SKIP", f"{detected.split()[0]} not found (auto; set {ctx.cfg.switch_name('tests')} to true to require it)")
+    cmd = cmd or detected
     tests: list[str] = []
     if ctx.narrow:
         found, why = affected_tests(ctx)
@@ -307,9 +330,9 @@ def stage_tests(ctx: Ctx) -> Res:
     else:
         pytest = ctx.tool("pytest_cmd", "pytest")
         extra = str(ctx.cfg.verify("pytest_args", "") or "").split()
-        miss = missing_tool(ctx, pytest[0], "tests")
+        miss = missing_tool(ctx, pytest[0], "tests", "pytest_cmd")
         if miss:
-            ctx.tests_rc = 1
+            ctx.tests_rc = 1 if miss.status == "FAIL" else 0
             return miss
         if ctx.narrow:
             argv = [*pytest, *extra, *tests]
@@ -361,11 +384,13 @@ def stage_diffcover(ctx: Ctx) -> Res:
         return Res("SKIP", "needs passing tests")
     dc = ctx.tool("diff_cover_cmd", "diff-cover")
     under = str(ctx.cfg.verify("fail_under", 90))
-    miss = missing_tool(ctx, dc[0], "diff-cover")
+    miss = missing_tool(ctx, dc[0], "diff-cover", "diff_cover_cmd")
     if miss:
         return miss
     if not ctx.base:
         return Res("FAIL", detail="no base branch found: set notes.base_branch in .agentkit.json")
+    if not (ctx.root / ctx.xml).is_file() and not required(ctx.cfg, "diff-cover", "diff_cover_cmd"):
+        return Res("SKIP", f"no coverage report ({ctx.xml}): the tests stage did not write one")
     if not (ctx.root / ctx.xml).is_file():
         return Res("FAIL", detail=f"{ctx.xml} is missing: diff-cover needs the coverage report of the tests stage "
                                   f"({ctx.cfg.switch_name('tests')})")
@@ -494,6 +519,8 @@ def edit_mode(arg: str) -> int:
         return 0  # a user command replaces ruff: not ours to run on one file
     ruff = str(cfg.verify("ruff_cmd", "ruff")).split() or ["ruff"]
     if not (ak.resolve_exe(ruff[0]) or ak.has_tool(ruff[0])):
+        if not (required(cfg, "lint", "ruff_cmd") or required(cfg, "format", "ruff_cmd")):
+            return 0  # auto: no ruff here, nothing to run
         say(f"{ruff[0]} not found: install it, or set {cfg.switch_name('lint')} to false in .agentkit.json to skip this stage")
         return 2
     rc, out = ak.run_argv([*ruff, "check", "--fix", "--quiet", "--force-exclude", *ak.RUFF_EXCLUDE, file], root)
