@@ -21,6 +21,13 @@ comes from a corrected agent mistake also gets a `FAILURES.md` entry naming the 
 
 Also for 2b (from the slim-down plan): the tiered verify engine and hooks, an `rmap` cache, `REPO_MAP`; a gate in `pl check` for `Done when` and decision ids (step 3); bench tasks T6 and T7.
 
+## Step 3 (the `pl check` / `pl apply` gate)
+
+### `pl apply` keeps the ticks of steps that did not change
+- Gap: `pl apply` calls `nt task --reset-plan`, so every step is unticked again, even the ones whose plan text did not change. Splitting one step of the 2b plan into 5a and 5b renumbered the steps after it, and `pl apply` reset 2/8 to 0/9; steps 1 and 2, both finished and committed with their title and Contract untouched, had to be re-ticked by hand with `nt task --check 1 --check 2` (the log line "plan replaced (2/8 done of old plan)" is all that records it). That re-tick is a tick without a check, the failure FAILURES.md 2026-11-11 describes.
+- Plan: `pl apply` stores a hash of each step's body (title, Files, Contract, Tests, Out of scope, Verify) next to its checklist line in the task note. On a re-apply, a step keeps its tick when a step with the same hash existed in the old plan and was ticked there, whatever its number; a step whose title or any field changed, and every step with no match, is unticked. The output lists which ticks were kept and which were dropped and why. The `nt task --check` verify gate (2b step 4) still applies to every new tick, and `pl apply` never creates one.
+- Tests: re-apply an unchanged plan keeps every tick; edit one Contract and only that step is unticked; renumber by inserting a step and the ticked steps below keep their ticks at their new numbers; split one ticked step into two and neither half is ticked (the 2b case: steps 1-2 kept, old step 5 split into 5a and 5b unticked); `pl apply` still logs the old progress.
+
 ## v0.4
 
 ### Merge message pattern in guard-git and pre-push
