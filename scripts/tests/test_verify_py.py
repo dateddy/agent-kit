@@ -29,6 +29,14 @@ STUBS = {
 HAVE_BASH = akcore.find_bash() is not None or not akcore.IS_NT
 
 
+def warn_line(n):
+    return f"WARN {n} deprecated keys in .agentkit.json (guards.* → verify.*); run: vf --print-migrated-config"
+
+
+WARN_FIXTURE = warn_line(14)  # guards: ruff ruff_cmd pytest pytest_cmd pytest_args coverage_xml diff_cover diff_cover_cmd
+#                               fail_under scope scope_ignore hook_stages push_stages (13) + verify.test
+
+
 def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
@@ -292,7 +300,8 @@ class AutoToolTests(VerifyCase):
         self.assertRegex(err, r"diff-cover  SKIP  diff-cover not found \(auto")
         self.assertIn("VERDICT: PASS (exit 0)", err)
         self.assertIn("pytest --cov", self.calls())
-        self.assertIn("WARN deprecated: guards.diff_cover -> verify.diff_cover", err)
+        warns = [line for line in err.splitlines() if line.startswith("WARN")]
+        self.assertEqual(warns, [WARN_FIXTURE], "one WARN line for all 14 deprecated keys of the 0.5.0 example")
         rc, _, err = self.run_v(env={"PATH": self.path_with()})
         self.assertEqual(rc, 0, err)
         for stage in ("lint", "tests", "diff-cover"):
@@ -351,8 +360,7 @@ class ConfigTests(VerifyCase):
         self.cfg({"guards": {"ruff": False, "pytest_cmd": "pytest -p no:cacheprovider", "fail_under": 70}})
         rc, _, err = self.run_v()
         self.assertEqual(rc, 0, err)
-        self.assertIn("WARN deprecated: guards.ruff -> verify.lint / verify.format", err)
-        self.assertIn("WARN deprecated: guards.pytest_cmd -> verify.pytest_cmd", err)
+        self.assertEqual([x for x in err.splitlines() if x.startswith("WARN")], [warn_line(3)])
         self.assertIn("lint        SKIP  disabled: guards.ruff=false", err)
         self.assertIn("pytest -p no:cacheprovider --cov", self.calls())
         self.assertIn("--fail-under=70", self.calls())
@@ -373,7 +381,7 @@ class ConfigTests(VerifyCase):
         self.cfg({"verify": {"test": "false", "diff_cover": False}})
         rc, _, err = self.run_v()
         self.assertEqual(rc, 0, err)
-        self.assertIn("WARN deprecated: verify.test -> verify.tests", err)
+        self.assertEqual([x for x in err.splitlines() if x.startswith("WARN")], [warn_line(1)])
         self.assertIn("tests       SKIP  disabled: verify.tests=false", err)
 
     def test_custom_command_runs_verbatim(self):
@@ -463,6 +471,61 @@ class IntegrityTests(VerifyCase):
         rc, _, err = self.run_v("--push", "--stages", "integrity")
         self.assertEqual(rc, 0, err)
         self.assertIn("test file DELETED", err)
+
+
+class MigrateTests(VerifyCase):
+    """`verify.py --print-migrated-config` prints the verify block that means what the current config means."""
+
+    CUSTOM = {"guards": {"ruff": False, "pytest_cmd": "uv run pytest", "fail_under": 70, "hook_stages": ["lint", "scope"],
+                         "diff_cover": True, "coverage_xml": ".agentkit/coverage.xml", "scope_ignore": None},
+              "verify": {"test": "make t", "typecheck": None}}
+
+    def migrated(self):
+        rc, out, err = self.run_v("--print-migrated-config")
+        self.assertEqual((rc, err), (0, ""), err)
+        return json.loads(out)
+
+    def test_the_0_5_0_example_migrates_to_all_auto(self):
+        shutil.copy(SCRIPTS / "tests" / "fixtures" / "agentkit.example.0.5.0.json", self.repo / ".agentkit.json")
+        self.assertEqual(self.migrated(), {"verify": {"format": "auto", "lint": "auto", "typecheck": "auto", "tests": "auto",
+                                                      "diff_cover": "auto", "scope": "auto"}})
+
+    def test_a_customised_config_keeps_every_choice_and_drops_the_defaults(self):
+        self.cfg(self.CUSTOM)
+        self.assertEqual(self.migrated(), {"verify": {"typecheck": None, "tests": "make t", "lint": False, "format": False,
+                                                      "diff_cover": "auto", "pytest_cmd": "uv run pytest", "fail_under": 70,
+                                                      "hook_stages": ["lint", "scope"]}})
+
+    def test_a_config_without_deprecated_keys_prints_itself(self):
+        self.cfg({"verify": {"lint": "ruff check .", "diff_cover": False, "fail_under": 80}})
+        self.assertEqual(self.migrated(), {"verify": {"lint": "ruff check .", "diff_cover": False, "fail_under": 80}})
+        (self.repo / ".agentkit.json").unlink()
+        self.assertEqual(self.migrated(), {"verify": {}})
+
+    def test_it_writes_nothing(self):
+        self.cfg(self.CUSTOM)
+        before = (self.repo / ".agentkit.json").read_bytes()
+        status = git(self.repo, "status", "--porcelain")
+        self.migrated()
+        self.assertEqual((self.repo / ".agentkit.json").read_bytes(), before)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), status)
+        self.assertEqual(sorted(p.name for p in self.repo.iterdir() if p.name != ".git"), [".agentkit.json", "README.md"])
+
+    def test_the_migrated_config_runs_the_same_commands(self):
+        self.cfg(self.CUSTOM)
+
+        def rows():
+            rc, out, err = self.run_v("--detect")
+            self.assertEqual(rc, 0, err)
+            return [tuple(line.split()[:1]) + (line[11:51].strip(),) for line in out.splitlines()], err
+
+        old_rows, old_err = rows()
+        self.assertRegex(old_err, r"WARN \d+ deprecated keys")
+        migrated = self.migrated()
+        self.cfg(migrated)
+        new_rows, new_err = rows()
+        self.assertEqual(new_rows, old_rows)
+        self.assertNotIn("WARN", new_err, "the migrated block has no deprecated keys")
 
 
 class CommonDirTests(VerifyCase):

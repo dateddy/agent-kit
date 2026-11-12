@@ -119,16 +119,35 @@ class Cfg:
             except (OSError, ValueError):
                 self.warnings.append(f"WARN: {p} is not valid JSON; using defaults")
         v, g = self.section("verify"), self.section("guards")
-        seen: set[str] = set()
-        for new, old in LEGACY_GUARDS.items():
-            if old in g and old not in seen:
-                seen.add(old)
-                target = "verify.lint / verify.format" if old == "ruff" else f"verify.{new}"
-                self.warnings.append(f"WARN deprecated: guards.{old} -> {target}")
-        if "test" in v:
-            self.warnings.append("WARN deprecated: verify.test -> verify.tests")
+        self.deprecated = sorted({f"guards.{old}" for old in LEGACY_GUARDS.values() if old in g} | ({"verify.test"} if "test" in v else set()))
+        if self.deprecated:
+            self.warnings.append(f"WARN {len(self.deprecated)} deprecated keys in .agentkit.json (guards.* → verify.*); "
+                                 "run: vf --print-migrated-config")
         if not warn:
             self.warnings = []
+
+    def migrated_verify(self) -> dict:
+        """The `verify` block that means what this config means now: the unified keys kept, the 0.5.0 keys folded in, values
+        equal to the defaults left out. Printed by `verify.py --print-migrated-config`; never written anywhere."""
+        v, g = self.section("verify"), self.section("guards")
+        out: dict = {}
+        for stage in ("format", "lint", "typecheck", "tests", "integrity", "diff_cover", "scope"):
+            if stage in v:
+                out[stage] = v[stage]
+            elif stage == "tests" and "test" in v:
+                out["tests"] = v["test"]
+            elif stage in SWITCH_KEYS and g.get(LEGACY_GUARDS[stage]) is not None:
+                out[stage] = self.verify(stage)  # a guards switch of true reads as "auto"
+        defaults = {"pytest_args": "", "fail_under": 90, "coverage_xml": ".agentkit/coverage.xml"}
+        for key in ("ruff_cmd", "pytest_cmd", "pytest_args", "diff_cover_cmd", "fail_under", "coverage_xml", "scope_ignore",
+                    "hook_stages", "push_stages", "typecheck_cmd"):
+            val = v[key] if key in v else g.get(LEGACY_GUARDS.get(key, ""))
+            if val is None or val == defaults.get(key, object()) or SHIPPED_TOOL_CMDS.get(key) == str(val).strip():
+                continue
+            if key in ("scope_ignore", "hook_stages", "push_stages") and not as_list(val):
+                continue
+            out[key] = val
+        return out
 
     def section(self, name: str) -> dict:
         v = self.data.get(name)

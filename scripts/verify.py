@@ -8,6 +8,7 @@
   verify.py --stages a,b    only these stages (alias --only; names: format lint typecheck tests integrity diff-cover scope)
   verify.py --affected      tests: only those in the blast radius of the changed files (skips diff-cover)
   verify.py --detect        print the command each stage would run, and why
+  verify.py --print-migrated-config   print the `verify` block equal to the current config (JSON, to paste; writes nothing)
 
 Exit codes. CLI and --push: 0 pass, 1 fail, 2 pass but test files were deleted, skipped or weakened (ask the user).
 --hook: 0 pass, 2 fail (exit 2 stops Claude from finishing and feeds stderr back; exit 1 would not block). It blocks
@@ -610,6 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--affected", action="store_true")
     ap.add_argument("--detect", action="store_true")
     ap.add_argument("--no-guard", action="store_true", help="skip the integrity stage")
+    ap.add_argument("--print-migrated-config", action="store_true", help="print the verify block equal to the current config")
     return ap
 
 
@@ -619,6 +621,10 @@ def main(argv: list[str] | None = None) -> int:
     a.notes = []
     if a.edit:
         return edit_mode(a.edit)
+    if a.print_migrated_config:  # prints JSON to stdout; writes nothing
+        root = ak.repo_root() or Path.cwd()
+        print(json.dumps({"verify": ak.Cfg(root, warn=False).migrated_verify()}, indent=2, ensure_ascii=False))
+        return 0
     mode = "hook" if a.hook else "push" if a.push else "cli"
     raw_in = sys.stdin.read() if mode == "hook" and not sys.stdin.isatty() else ""
     stop_active = bool(STOP_RE.search(raw_in))
