@@ -26,6 +26,7 @@ stage; it never passes silently. The scope stage is skipped when the branch has 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import sys
@@ -46,6 +47,48 @@ STOP_RE = re.compile(r'"stop_hook_active"\s*:\s*true')
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*\.py$|_test\.(py|go)$|\.(test|spec)\.[jt]sx?$")
 SKIP_RE = re.compile(r"(pytest\.mark\.(skip|xfail)|@unittest\.skip|\b(it|test|describe)\.(skip|todo)\(|"
                      r"\bxit\(|\bxdescribe\(|t\.Skip\(|#\[ignore\]|pytest\.skip\()")
+
+
+RUFF_EXCLUDE = ["--extend-exclude", ".agentkit", "--extend-exclude", ".claude"]
+# the switch key to tell the user about, per stage, for the 0.5.0 layout
+GUARDS_SWITCH = {"lint": "guards.ruff", "format": "guards.ruff", "tests": "guards.pytest", "diff-cover": "guards.diff_cover",
+                 "scope": "guards.scope"}
+
+
+def switch_name(cfg: ak.Cfg, stage: str) -> str:
+    """guards.* while the user still has the 0.5.0 layout, else verify.<stage>."""
+    if cfg.uses_guards() and not cfg.has_new_keys():
+        return GUARDS_SWITCH.get(stage, f"verify.{stage}")
+    return f"verify.{stage.replace('-', '_')}"
+
+
+def default_ignores(cfg: ak.Cfg, xml: str) -> list[str]:
+    custom = ak.as_list(cfg.verify("scope_ignore"))
+    pats = custom or [".agentkit/*", ".agentkit.json", f"{cfg.get('notes.dir', 'notes')}/*", "FAILURES.md", ".coverage",
+                      ".coverage.*", "coverage.xml"]
+    return [*pats, xml, ".agentkit/logs/*", ".agentkit/state/*", ".agentkit/cache/*", ".agentkit/tmp/*"]
+
+
+def ignored(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(path, p) for p in patterns if p)
+
+
+def changed_files(root: Path, base: str, patterns: list[str]) -> list[str]:
+    """Paths changed on the branch (base...HEAD), uncommitted and untracked, minus ignored ones, in order, unique."""
+    out: list[str] = []
+    if base:
+        out += ak.git_lines(["diff", "--name-only", f"{base}...HEAD"], root)
+    out += ak.git_lines(["diff", "--name-only", "HEAD"], root)
+    out += ak.git_lines(["ls-files", "--others", "--exclude-standard"], root)
+    seen: set[str] = set()
+    res = []
+    for f in out:
+        if f in seen:
+            continue
+        seen.add(f)
+        if not ignored(f, patterns):
+            res.append(f)
+    return res
 
 
 class Abort(Exception):
@@ -72,7 +115,7 @@ class Ctx:
         self.branch = ak.current_branch(root)
         self.base = cfg.base_ref()
         self.xml = str(cfg.verify("coverage_xml", ".agentkit/coverage.xml"))
-        self.ignores = ak.default_ignores(cfg, self.xml)
+        self.ignores = default_ignores(cfg, self.xml)
         self.changed: list[str] = []
         self.tests_rc = 0
         self.selected: list[str] = []
@@ -106,10 +149,10 @@ def read(p: Path) -> str:
 
 def disabled(ctx: Ctx, stage: str) -> str | None:
     if stage in ("format", "lint", "typecheck", "tests") and ctx.cfg.is_null(stage):
-        return f"disabled: {ctx.cfg.switch_name(stage)}=null"
+        return f"disabled: {switch_name(ctx.cfg, stage)}=null"
     raw = ctx.cfg.verify(KEY.get(stage, stage), "auto")
     if raw is False or raw == "" or (not isinstance(raw, (dict, list)) and ak.is_off(raw)):
-        return f"disabled: {ctx.cfg.switch_name(stage)}={'false' if raw != '' else repr('')}"
+        return f"disabled: {switch_name(ctx.cfg, stage)}={'false' if raw != '' else repr('')}"
     return None
 
 
@@ -131,15 +174,15 @@ def missing_tool(ctx: Ctx, tool: str, stage: str, tool_key: str = "") -> Res | N
     if ak.resolve_exe(tool) or ak.has_tool(tool):
         return None
     if required(ctx.cfg, stage, tool_key):
-        return Res("FAIL", detail=f"{tool} not found: install it, or set {ctx.cfg.switch_name(stage)} to false in "
+        return Res("FAIL", detail=f"{tool} not found: install it, or set {switch_name(ctx.cfg, stage)} to false in "
                                   ".agentkit.json to skip this stage")
-    return Res("SKIP", f"{tool} not found (auto; set {ctx.cfg.switch_name(stage)} to true to require it)")
+    return Res("SKIP", f"{tool} not found (auto; set {switch_name(ctx.cfg, stage)} to true to require it)")
 
 
 def run_detected(ctx: Ctx, stage: str, cmd: str) -> Res:
     """A command found by detect(): the project configures that tool, but it may not be installed here."""
     if not required(ctx.cfg, stage) and not ak.has_tool(cmd.split()[0]):
-        return Res("SKIP", f"{cmd.split()[0]} not found (auto; set {ctx.cfg.switch_name(stage)} to true to require it)")
+        return Res("SKIP", f"{cmd.split()[0]} not found (auto; set {switch_name(ctx.cfg, stage)} to true to require it)")
     return run_shell_stage(ctx, stage, cmd)
 
 
@@ -262,8 +305,8 @@ def narrow_test_cmd(root: Path, cmd: str, tests: list[str]) -> str | None:
 def ruff_argv(ctx: Ctx, stage: str, targets: list[str]) -> list[str]:
     force = ["--force-exclude"] if targets != ["."] else []
     if stage == "lint":
-        return [*ctx.tool("ruff_cmd", "ruff"), "check", "--quiet", "--output-format", "concise", *force, *ak.RUFF_EXCLUDE, *targets]
-    return [*ctx.tool("ruff_cmd", "ruff"), "format", "--check", *force, *ak.RUFF_EXCLUDE, *targets]
+        return [*ctx.tool("ruff_cmd", "ruff"), "check", "--quiet", "--output-format", "concise", *force, *RUFF_EXCLUDE, *targets]
+    return [*ctx.tool("ruff_cmd", "ruff"), "format", "--check", *force, *RUFF_EXCLUDE, *targets]
 
 
 def format_with_lint(ctx: Ctx) -> bool:
@@ -307,7 +350,7 @@ def stage_tests(ctx: Ctx) -> Res:
     cmd = custom_cmd(ctx, "tests")
     detected = (ctx.detected.get("tests") or ("",))[0] if not cmd else ""
     if detected and not required(ctx.cfg, "tests") and not ak.has_tool(detected.split()[0]):
-        return Res("SKIP", f"{detected.split()[0]} not found (auto; set {ctx.cfg.switch_name('tests')} to true to require it)")
+        return Res("SKIP", f"{detected.split()[0]} not found (auto; set {switch_name(ctx.cfg, 'tests')} to true to require it)")
     cmd = cmd or detected
     tests: list[str] = []
     if ctx.narrow:
@@ -393,7 +436,7 @@ def stage_diffcover(ctx: Ctx) -> Res:
         return Res("SKIP", f"no coverage report ({ctx.xml}): the tests stage did not write one")
     if not (ctx.root / ctx.xml).is_file():
         return Res("FAIL", detail=f"{ctx.xml} is missing: diff-cover needs the coverage report of the tests stage "
-                                  f"({ctx.cfg.switch_name('tests')})")
+                                  f"({switch_name(ctx.cfg, 'tests')})")
     return run_argv_stage(ctx, "diff-cover", [*dc, ctx.xml, f"--compare-branch={ctx.base}", f"--fail-under={under}"])
 
 
@@ -418,7 +461,6 @@ def mentions(text: str, path: str) -> bool:
 
 
 def in_plan(path: str, allowed: list[str]) -> bool:
-    import fnmatch
     for p in allowed:
         if path == p or (p.endswith("/") and path.startswith(p)) or fnmatch.fnmatchcase(path, p):
             return True
@@ -521,10 +563,10 @@ def edit_mode(arg: str) -> int:
     if not (ak.resolve_exe(ruff[0]) or ak.has_tool(ruff[0])):
         if not (required(cfg, "lint", "ruff_cmd") or required(cfg, "format", "ruff_cmd")):
             return 0  # auto: no ruff here, nothing to run
-        say(f"{ruff[0]} not found: install it, or set {cfg.switch_name('lint')} to false in .agentkit.json to skip this stage")
+        say(f"{ruff[0]} not found: install it, or set {switch_name(cfg, 'lint')} to false in .agentkit.json to skip this stage")
         return 2
-    rc, out = ak.run_argv([*ruff, "check", "--fix", "--quiet", "--force-exclude", *ak.RUFF_EXCLUDE, file], root)
-    ak.run_argv([*ruff, "format", "--quiet", "--force-exclude", *ak.RUFF_EXCLUDE, file], root)
+    rc, out = ak.run_argv([*ruff, "check", "--fix", "--quiet", "--force-exclude", *RUFF_EXCLUDE, file], root)
+    ak.run_argv([*ruff, "format", "--quiet", "--force-exclude", *RUFF_EXCLUDE, file], root)
     if rc != 0:
         say(f"ruff left problems in {file}:", *out.rstrip("\n").split("\n")[-MAX_LINES:])
         return 2
@@ -537,7 +579,7 @@ def describe(ctx: Ctx, stage: str) -> tuple[str, str]:
         return "-", off
     cmd = custom_cmd(ctx, stage)
     if cmd:
-        return cmd, f"set in {ctx.cfg.switch_name(stage)}"
+        return cmd, f"set in {switch_name(ctx.cfg, stage)}"
     det = ctx.detected.get(stage)
     if det and stage in ("format", "lint", "typecheck", "tests"):
         return det
@@ -604,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
                 bad = "" if cmd in ("-", "(built in)") or ak.has_tool(cmd.split()[0]) else "  [tool not installed]"
                 print(f"{st:10} {cmd:40} ({why}){bad}")
             return 0
-        ctx.changed = ak.changed_files(root, ctx.base, ctx.ignores)
+        ctx.changed = changed_files(root, ctx.base, ctx.ignores)
         if mode == "hook" and not ctx.changed:
             return 0
         say(*cfg.warnings)

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """akcore - helpers shared by the agent-kit scripts: config, git, paths, tool lookup. Stdlib only.
 
+Scope (D-f4b8): only what several scripts need. No stage or rule logic: that stays in verify.py, guard.py, prepush.py.
+
 Imported by verify.py (and later prepush.py); not a command. It replaces lib.sh and needs no jq.
 Config is read from <repo>/.agentkit.json. `verify` is the one block for the gates; the 0.5.0 keys
 (`guards.ruff`, `guards.pytest_cmd`, `verify.test`, ...) are still read, and print a deprecation WARN.
@@ -19,7 +21,6 @@ from pathlib import Path
 
 IS_NT = os.name == "nt"
 CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-RUFF_EXCLUDE = ["--extend-exclude", ".agentkit", "--extend-exclude", ".claude"]
 
 # new key under `verify` -> the 0.5.0 key under `guards` (a bool switch, or a value)
 LEGACY_GUARDS = {
@@ -38,14 +39,6 @@ LEGACY_GUARDS = {
     "hook_stages": "hook_stages",
     "push_stages": "push_stages",
 }
-# the stage names for the switch keys of the 0.5.0 layout, used in messages
-GUARDS_SWITCH = {
-    "lint": "guards.ruff",
-    "format": "guards.ruff",
-    "tests": "guards.pytest",
-    "diff-cover": "guards.diff_cover",
-    "scope": "guards.scope",
-}
 OFF = {"false", "0", "no", "off"}
 
 
@@ -62,6 +55,12 @@ def git(args: list[str], cwd: str | Path | None = None) -> tuple[int, str]:
 def git_lines(args: list[str], cwd: str | Path | None = None) -> list[str]:
     rc, out = git(args, cwd)
     return [x.rstrip("\r") for x in out.splitlines() if x.strip()] if rc == 0 else []
+
+
+def git_common_dir(cwd: str | Path | None = None) -> Path | None:
+    """The repository's shared .git directory (the same for every worktree), absolute."""
+    rc, out = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd)
+    return Path(out.strip()) if rc == 0 and out.strip() else None
 
 
 def repo_root(cwd: str | Path | None = None) -> Path | None:
@@ -171,12 +170,6 @@ class Cfg:
         v = self.section("verify")
         return (key in v and v[key] is None) or (key == "tests" and "tests" not in v and "test" in v and v["test"] is None)
 
-    def switch_name(self, stage: str) -> str:
-        """The key to tell the user about for a stage switch: guards.* when they still use the 0.5.0 layout."""
-        if self.uses_guards() and not self.has_new_keys():
-            return GUARDS_SWITCH.get(stage, f"verify.{stage}")
-        return f"verify.{stage.replace('-', '_')}"
-
     def notes_dir(self) -> Path:
         d = str(self.get("notes.dir", "notes")).rstrip("/\\") or "notes"
         return self.root / d
@@ -209,36 +202,6 @@ class Cfg:
         if git(["rev-parse", "--verify", "-q", f"origin/{b}"], root)[0] == 0:
             return f"origin/{b}"
         return ""
-
-
-# ---------------------------------------------------------------- changed files
-def default_ignores(cfg: Cfg, xml: str) -> list[str]:
-    custom = as_list(cfg.verify("scope_ignore"))
-    pats = custom or [".agentkit/*", ".agentkit.json", f"{cfg.get('notes.dir', 'notes')}/*", "FAILURES.md", ".coverage",
-                      ".coverage.*", "coverage.xml"]
-    return [*pats, xml, ".agentkit/logs/*", ".agentkit/state/*", ".agentkit/cache/*"]
-
-
-def ignored(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatchcase(path, p) for p in patterns if p)
-
-
-def changed_files(root: Path, base: str, patterns: list[str]) -> list[str]:
-    """Paths changed on the branch (base...HEAD), uncommitted and untracked, minus ignored ones, in order, unique."""
-    out: list[str] = []
-    if base:
-        out += git_lines(["diff", "--name-only", f"{base}...HEAD"], root)
-    out += git_lines(["diff", "--name-only", "HEAD"], root)
-    out += git_lines(["ls-files", "--others", "--exclude-standard"], root)
-    seen: set[str] = set()
-    res = []
-    for f in out:
-        if f in seen:
-            continue
-        seen.add(f)
-        if not ignored(f, patterns):
-            res.append(f)
-    return res
 
 
 # ---------------------------------------------------------------- tools

@@ -190,6 +190,21 @@ class EditModeTests(VerifyCase):
         self.cfg({"verify": {"lint": False, "format": False}})
         self.assertEqual(self.run_v("--edit", stdin=payload)[0], 0)
 
+    def test_edit_never_formats_a_file_under_the_kits_own_config(self):
+        """The kit's style is not ruff's (ruff.toml says never run ruff format): with the kit's current .agentkit.json the
+        edit hook must neither call ruff nor change the file, however unformatted it is."""
+        kit_cfg = (SCRIPTS.parent / ".agentkit.json").read_text(encoding="utf-8")
+        (self.repo / ".agentkit.json").write_text(kit_cfg, encoding="utf-8")
+        ugly = "import   os,sys" + chr(10) + "x = {  'a':1 }" + chr(10)
+        for rel in ("m.py", "scripts/s.py", "tools/t.py"):
+            f = self.repo / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(ugly, encoding="utf-8", newline="")
+            rc, out, err = self.edit(f)
+            self.assertEqual((rc, out, err), (0, "", ""), rel)
+            self.assertEqual(f.read_text(encoding="utf-8"), ugly, f"{rel} was rewritten")
+        self.assertEqual(self.calls(), "", "ruff was called")
+
     def test_edit_without_file_is_a_noop(self):
         self.assertEqual(self.run_v("--edit", stdin='{"tool_input":{}}')[0], 0)
         self.assertEqual(self.run_v("--edit", stdin="not json")[0], 0)
@@ -394,6 +409,16 @@ class IntegrityTests(VerifyCase):
         rc, _, err = self.run_v("--push", "--stages", "integrity")
         self.assertEqual(rc, 0, err)
         self.assertIn("test file DELETED", err)
+
+
+class CommonDirTests(VerifyCase):
+    def test_git_common_dir_is_the_same_in_every_worktree(self):
+        main = akcore.git_common_dir(self.repo)
+        self.assertEqual(Path(os.path.realpath(main)), Path(os.path.realpath(self.repo / ".git")))
+        wt = self.tmp / (self.repo.name + "-wt")
+        git(self.repo, "worktree", "add", "-q", "-b", "other", str(wt))
+        self.assertEqual(Path(os.path.realpath(akcore.git_common_dir(wt))), Path(os.path.realpath(main)))
+        self.assertIsNone(akcore.git_common_dir(self.tmp))
 
 
 class AkcoreTests(unittest.TestCase):
