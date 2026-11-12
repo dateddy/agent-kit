@@ -279,6 +279,60 @@ class AutoToolTests(VerifyCase):
         self.assertIn("diff-cover  SKIP  disabled: verify.diff_cover=false", err)
         self.assertIn("lint        SKIP  disabled: verify.lint=null", err)
 
+    def test_a_config_copied_unchanged_from_the_0_5_0_example_passes_without_diff_cover(self):
+        """The 0.5.0 example shipped diff_cover: true, ruff_cmd, pytest_cmd and diff_cover_cmd. Those are the kit's defaults,
+        not the user's choice: with no diff-cover installed the run passes and diff-cover is a SKIP."""
+        self.changed()
+        shutil.copy(SCRIPTS / "tests" / "fixtures" / "agentkit.example.0.5.0.json", self.repo / ".agentkit.json")
+        raw = json.loads((self.repo / ".agentkit.json").read_text(encoding="utf-8"))["guards"]
+        self.assertEqual((raw["diff_cover"], raw["diff_cover_cmd"], raw["ruff_cmd"], raw["pytest_cmd"]),
+                         (True, "diff-cover", "ruff", "pytest"), "the fixture is not the 0.5.0 example")
+        rc, out, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+        self.assertEqual((rc, out), (0, ""), err)
+        self.assertRegex(err, r"diff-cover  SKIP  diff-cover not found \(auto")
+        self.assertIn("VERDICT: PASS (exit 0)", err)
+        self.assertIn("pytest --cov", self.calls())
+        self.assertIn("WARN deprecated: guards.diff_cover -> verify.diff_cover", err)
+        rc, _, err = self.run_v(env={"PATH": self.path_with()})
+        self.assertEqual(rc, 0, err)
+        for stage in ("lint", "tests", "diff-cover"):
+            self.assertRegex(err, stage + r"\s+SKIP\s+\S+ not found \(auto")
+
+    def test_the_new_example_is_all_auto_and_names_no_tool_command(self):
+        example = json.loads((SCRIPTS.parent / ".agentkit.example.json").read_text(encoding="utf-8"))
+        block = example["verify"]
+        for stage in ("format", "lint", "typecheck", "tests", "integrity", "diff_cover", "scope"):
+            self.assertEqual(block[stage], "auto", stage)
+        self.assertFalse([k for k in block if k.endswith("_cmd") and not k.startswith("_")], "*_cmd keys belong in comments")
+        self.assertNotIn("diff-cover", [v for k, v in block.items() if not k.startswith("_") and isinstance(v, str)])
+        self.changed()
+        shutil.copy(SCRIPTS.parent / ".agentkit.example.json", self.repo / ".agentkit.json")
+        rc, _, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("WARN", err)
+        self.assertRegex(err, r"diff-cover  SKIP  diff-cover not found \(auto")
+
+    def test_a_tool_command_equal_to_the_shipped_default_is_not_explicit(self):
+        self.changed()
+        self.cfg({"verify": {"diff_cover_cmd": "diff-cover", "ruff_cmd": "ruff", "pytest_cmd": "pytest"}})
+        rc, _, err = self.run_v(env={"PATH": self.path_with()})
+        self.assertEqual(rc, 0, err)
+        self.cfg({"verify": {"diff_cover_cmd": "diff-cover --some-wrapper"}})
+        rc, _, err = self.run_v(env={"PATH": self.path_with("ruff", "pytest")})
+        self.assertEqual(rc, 1, err)
+        self.assertRegex(err, r"diff-cover\s+FAIL")
+
+    def test_a_legacy_switch_of_true_reads_as_auto_but_the_new_key_true_is_required(self):
+        self.changed()
+        env = {"PATH": self.path_with("ruff", "pytest")}
+        self.cfg({"guards": {"diff_cover": True, "ruff": True, "pytest": True, "scope": True}})
+        rc, _, err = self.run_v(env=env)
+        self.assertEqual(rc, 0, err)
+        self.cfg({"verify": {"diff_cover": True}, "guards": {"diff_cover": True}})
+        rc, _, err = self.run_v(env=env)
+        self.assertEqual(rc, 1, err)
+        self.assertRegex(err, r"diff-cover\s+FAIL")
+
     def test_edit_without_ruff_is_silent_under_auto_and_loud_when_required(self):
         (self.repo / "m.py").write_text("x=1\n", encoding="utf-8")
         payload = json.dumps({"tool_input": {"file_path": str(self.repo / "m.py")}})

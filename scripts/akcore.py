@@ -39,6 +39,10 @@ LEGACY_GUARDS = {
     "hook_stages": "hook_stages",
     "push_stages": "push_stages",
 }
+# What 0.5.0's .agentkit.example.json shipped. A config copied from it holds these values by default, not by choice:
+# a tool command equal to its default is not an explicit request for that tool, and a switch equal to true reads as "auto".
+SHIPPED_TOOL_CMDS = {"ruff_cmd": "ruff", "pytest_cmd": "pytest", "diff_cover_cmd": "diff-cover"}
+SWITCH_KEYS = ("lint", "format", "tests", "diff_cover", "scope")
 OFF = {"false", "0", "no", "off"}
 
 
@@ -156,14 +160,15 @@ class Cfg:
             return v["test"]
         old = LEGACY_GUARDS.get(key)
         if old and old in g and g[old] is not None:
-            return g[old]
+            # a 0.5.0 switch of true is the shipped default, not a request: it reads as "auto" (verify.<key>: true is a request)
+            return "auto" if key in SWITCH_KEYS and g[old] is True else g[old]
         return default
 
     def explicit(self, key: str) -> bool:
-        """The user set verify.<key> (or its 0.5.0 guards key) to a value: they asked for that tool."""
-        v, g = self.section("verify"), self.section("guards")
-        old = LEGACY_GUARDS.get(key)
-        return v.get(key) is not None or bool(old and g.get(old) is not None)
+        """The user asked for this tool: verify.<key> (or its 0.5.0 guards key) is set to something other than the value
+        0.5.0 shipped. A *_cmd equal to the shipped default only says which command runs, not that it must exist."""
+        val = self.verify(key)
+        return val is not None and str(val).strip() != SHIPPED_TOOL_CMDS.get(key)
 
     def is_null(self, key: str) -> bool:
         """verify.<key> is an explicit JSON null: the 0.5.0 skill's way to switch a format/lint/typecheck/tests gate off."""

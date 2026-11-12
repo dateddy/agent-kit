@@ -38,41 +38,36 @@
   },
 
   "verify": {
-    "_comment": "\"auto\" = detect · a command string = use it · null = skip this gate",
+    "_comment": "One block for every gate (scripts/verify.py). A stage is \"auto\" (run it when its tool is installed, otherwise SKIP with a note) | true (run it; a missing tool FAILs) | false or null (off). format, lint, typecheck and tests also take a command string, used as written. Which tool runs is not set here: ruff, pytest and diff-cover are the defaults. Set ruff_cmd, pytest_cmd or diff_cover_cmd (split on spaces, no quoting, e.g. \"uv run ruff\") only to run something else; a value other than the default counts as required.",
     "format": "auto",
     "lint": "auto",
     "typecheck": "auto",
-    "test": "auto"
-  },
-
-  "guards": {
-    "_comment": "Read by scripts/*.sh (install.py --guards). git.protected_branches, git.protected_commit, notes.dir and notes.base_branch above are used too. false switches a stage off; a missing tool fails its stage.",
-    "ruff": true,
-    "_ruff_cmd": "command for the lint stage (split on spaces, no quoting): ruff check --quiet --output-format concise . ; ruff format --check .",
-    "ruff_cmd": "ruff",
-    "pytest": true,
-    "pytest_cmd": "pytest",
+    "tests": "auto",
+    "integrity": "auto",
+    "diff_cover": "auto",
+    "scope": "auto",
     "_pytest_args": "extra pytest arguments, e.g. --cov=src ; the coverage report is always --cov --cov-report=xml:<coverage_xml>",
     "pytest_args": "",
     "coverage_xml": ".agentkit/coverage.xml",
-    "diff_cover": true,
-    "diff_cover_cmd": "diff-cover",
     "_fail_under": "minimum coverage (%) of the lines changed against the base branch",
     "fail_under": 90,
-    "scope": true,
     "_scope_ignore": "globs the scope check never reports; null = built-in list (.agentkit/*, .agentkit.json, <notes.dir>/*, FAILURES.md, coverage files)",
     "scope_ignore": null,
-    "_hook_stages": "stages verify.sh runs from the Stop hook (--hook); null = all. Names: lint, tests, diff-cover, scope",
+    "_hook_stages": "stages the Stop hook runs (verify.py --hook); null = lint, tests, integrity, scope. Names: format, lint, typecheck, tests, integrity, diff-cover, scope",
     "hook_stages": null,
-    "_push_stages": "stages verify.sh runs from pre-push (--push); null = all. verify.sh --stages a,b overrides both",
-    "push_stages": null,
+    "_push_stages": "stages pre-push runs (verify.py --push); null = all. verify.py --stages a,b overrides both",
+    "push_stages": null
+  },
+
+  "guards": {
+    "_comment": "Read by guard.py (PreToolUse guard-git.sh) and pre-push. git.protected_branches, git.protected_commit, notes.dir and notes.base_branch above are used too. The verify keys that used to live here (ruff, pytest, diff_cover, scope, *_cmd, fail_under, hook_stages, ...) moved to the verify block; the old names still work for one version and print a deprecation WARN.",
     "_destructive": "ask | block | allow: what happens on git reset --hard, branch -D, clean -f, stash drop, checkout -- <path>, restore, push --delete, filter-branch, update-ref -d, reflog expire, gc --prune=now, force push to an unprotected branch, and on rm/mv/truncate/dd/sed -i whose target holds an unresolved variable. A force push to a protected branch is always blocked",
     "destructive": "ask",
     "_merge_convention": "free text shown in merge/push block messages, e.g. \"merge commit named feat(<scope>): merge X\"",
     "merge_convention": null,
     "_require_merge_commits": "pre-push: every first-parent commit pushed to a protected branch must be a merge commit",
     "require_merge_commits": true,
-    "_verify_on_push": "pre-push also runs verify.sh",
+    "_verify_on_push": "pre-push also runs verify.py --push",
     "verify_on_push": true
   },
 

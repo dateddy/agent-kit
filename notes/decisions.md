@@ -202,3 +202,11 @@ Why: Requested by the user after step 2.
 ## D-dcde · 2026-11-12 · 2b-g · refactor/verify-engine
 Stage defaults follow the 0.5.0 skill for every stage incl. diff_cover: "auto" (default) runs when the tool exists, else SKIP with a one-line note; true, a custom command string or an explicitly set tool key (ruff_cmd, pytest_cmd, diff_cover_cmd) = required: missing tool FAILs; false/null = off. Missing coverage report: SKIP under auto, FAIL when required. test_verify.sh t_missing_* set the tool keys, so they hold unchanged.
 Why: User asked for the skill's semantics; explicit tool keys reconcile the two old tests without editing them.
+
+## D-275e · 2026-11-12 · 2b-j · refactor/verify-engine
+A stage switch (true/auto/false) decides whether a stage runs; *_cmd keys only say which command. A *_cmd equal to the 0.5.0 shipped default (ruff, pytest, diff-cover) is not explicit. A guards.* switch equal to its 0.5.0 default (true) reads as auto during deprecation; verify.<stage>: true written in the new block stays required. New .agentkit.example.json: every switch auto, *_cmd only in comments.
+Why: A config copied unchanged from the 0.5.0 example held the shipped defaults, not the user's intent, and made a missing diff-cover a FAIL.
+
+## D-c375 · 2026-11-12 · scope · refactor/verify-engine
+2b example-config fixup touches .agentkit.example.json, scripts/akcore.py, scripts/verify.py, scripts/tests/test_verify_py.py and the new scripts/tests/fixtures/agentkit.example.0.5.0.json (the 0.5.0 example, copied unchanged, the fixture of the downstream-copy test).
+Why: Requested by the user after the step 2 fixups.

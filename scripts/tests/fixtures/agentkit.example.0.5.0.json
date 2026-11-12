@@ -1,0 +1,90 @@
+{
+  "_comment": "Copied to <repo>/.agentkit.json by install.py. Every key is optional; scripts fall back to these defaults. Keys starting with _ are comments.",
+
+  "git": {
+    "protected_branches": ["main", "master", "develop", "release/*"],
+    "_protected_commit": "ask = agent must get your yes (default) | allow = no question | block = always refuse",
+    "protected_commit": "ask",
+    "commit_types": ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"],
+    "scopes": [],
+    "strict_scopes": false,
+    "subject_max": 72,
+    "body_wrap": 100,
+    "max_file_mb": 5
+  },
+
+  "notes": {
+    "dir": "notes",
+    "_commit_tasks": "false = notes/tasks/ (task notes + plans) is gitignored; decisions.md is committed",
+    "commit_tasks": false,
+    "max_decision_chars": 600,
+    "max_decision_lines": 10,
+    "_max_knowledge_facts": "nt brief prints every fact of notes/knowledge.md; above this many it warns to split the file by area",
+    "max_knowledge_facts": 20,
+    "base_branch": null
+  },
+
+  "context": {
+    "max_output_lines": 60,
+    "_ignore_dirs": "added to the built-in list (.git, node_modules, .venv, __pycache__, dist, build, wandb, mlruns, checkpoints …)",
+    "ignore_dirs": [],
+    "_zone_max_files": "rmap --zone prints at most this many zone files before '… +k more'",
+    "zone_max_files": 40
+  },
+
+  "debug": {
+    "_min_similarity": "dbg open/similar flag a past bug when keyword overlap (0-1) reaches this and >=2 words are shared",
+    "min_similarity": 0.4
+  },
+
+  "verify": {
+    "_comment": "\"auto\" = detect · a command string = use it · null = skip this gate",
+    "format": "auto",
+    "lint": "auto",
+    "typecheck": "auto",
+    "test": "auto"
+  },
+
+  "guards": {
+    "_comment": "Read by scripts/*.sh (install.py --guards). git.protected_branches, git.protected_commit, notes.dir and notes.base_branch above are used too. false switches a stage off; a missing tool fails its stage.",
+    "ruff": true,
+    "_ruff_cmd": "command for the lint stage (split on spaces, no quoting): ruff check --quiet --output-format concise . ; ruff format --check .",
+    "ruff_cmd": "ruff",
+    "pytest": true,
+    "pytest_cmd": "pytest",
+    "_pytest_args": "extra pytest arguments, e.g. --cov=src ; the coverage report is always --cov --cov-report=xml:<coverage_xml>",
+    "pytest_args": "",
+    "coverage_xml": ".agentkit/coverage.xml",
+    "diff_cover": true,
+    "diff_cover_cmd": "diff-cover",
+    "_fail_under": "minimum coverage (%) of the lines changed against the base branch",
+    "fail_under": 90,
+    "scope": true,
+    "_scope_ignore": "globs the scope check never reports; null = built-in list (.agentkit/*, .agentkit.json, <notes.dir>/*, FAILURES.md, coverage files)",
+    "scope_ignore": null,
+    "_hook_stages": "stages verify.sh runs from the Stop hook (--hook); null = all. Names: lint, tests, diff-cover, scope",
+    "hook_stages": null,
+    "_push_stages": "stages verify.sh runs from pre-push (--push); null = all. verify.sh --stages a,b overrides both",
+    "push_stages": null,
+    "_destructive": "ask | block | allow: what happens on git reset --hard, branch -D, clean -f, stash drop, checkout -- <path>, restore, push --delete, filter-branch, update-ref -d, reflog expire, gc --prune=now, force push to an unprotected branch, and on rm/mv/truncate/dd/sed -i whose target holds an unresolved variable. A force push to a protected branch is always blocked",
+    "destructive": "ask",
+    "_merge_convention": "free text shown in merge/push block messages, e.g. \"merge commit named feat(<scope>): merge X\"",
+    "merge_convention": null,
+    "_require_merge_commits": "pre-push: every first-parent commit pushed to a protected branch must be a merge commit",
+    "require_merge_commits": true,
+    "_verify_on_push": "pre-push also runs verify.sh",
+    "verify_on_push": true
+  },
+
+  "fs": {
+    "_comment": "Files outside the repo, read by scripts/guard.py (PreToolUse guard-fs.sh for Edit/Write/NotebookEdit and guard-git.sh for Bash). The repo is the git work tree around the working directory plus every worktree that shares its .git. Patterns are globs ({tmp} = the OS scratch dir, ~ = home, ** crosses directories; a relative pattern is taken from the repo root). An explicit empty list [] means none; omit a key for its default",
+    "_outside_repo_write": "ask | block: what happens when the agent writes, edits or deletes a file outside the repo (Edit/Write tools, rm, mv, cp target, redirects > >> 2> &>, sed -i, tee ...) and the path is not in allow_write. The message shows the absolute path. AGENTKIT_HEADLESS=1 turns every ask into a block",
+    "outside_repo_write": "ask",
+    "_allow_write": "paths outside the repo that are always writable (scratch space and caches)",
+    "allow_write": ["/tmp/**", "~/.cache/**", "{tmp}/**"],
+    "_deny_read": "files no tool may read: a Bash command with any word naming one is blocked, and install.py --guards adds them as Read() rules to permissions.deny of the Claude Code settings (Claude Code applies a Read deny rule to Grep and Glob too, best effort)",
+    "deny_read": ["~/.ssh/**", "~/.aws/**", "~/.config/gh/**", "~/.gnupg/**", "**/.env", "**/.env.*", "**/*.pem", "**/id_rsa*"],
+    "_allow_read": "exceptions to deny_read (templates people commit on purpose); written as Read(!pattern) carve-outs, which Claude Code honours only for relative patterns",
+    "allow_read": ["**/.env.example", "**/.env.sample", "**/.env.template"]
+  }
+}
