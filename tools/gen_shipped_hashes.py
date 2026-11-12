@@ -11,6 +11,7 @@ Stdlib only; needs the tags in this clone (git fetch --tags).
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
@@ -34,6 +35,7 @@ def digest(data: bytes) -> str:
 
 
 def main() -> int:
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
     skills: dict[str, dict[str, set[str]]] = {n: {} for n in REMOVED_SKILLS}
     commands: dict[str, set[str]] = {n: set() for n in REMOVED_COMMANDS}
     seen = 0
@@ -61,7 +63,7 @@ def main() -> int:
         "skills": {n: {p: sorted(h) for p, h in sorted(files.items())} for n, files in skills.items()},
         "commands": {n: sorted(h) for n, h in commands.items()},
     }
-    OUT.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    OUT.write_bytes((json.dumps(doc, indent=1, sort_keys=True) + chr(10)).encode("utf-8"))  # LF on every OS (.gitattributes eol=lf)
     print(f"OK: {OUT.relative_to(KIT)} from {seen} tag(s): "
           + ", ".join(f"{n}={len(f)} files" for n, f in skills.items()))
     return 0

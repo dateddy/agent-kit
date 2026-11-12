@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
-.agentkit/logs/
+# the kit's own state, caches, logs and scratch files (nothing under .agentkit is tracked)
+.agentkit/
 /bench/
 # agent task notes (personal)
 /notes/tasks/

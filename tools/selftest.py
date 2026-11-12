@@ -1573,11 +1573,18 @@ def h(t: T):
     scripts = sorted([*SK.glob("*/scripts/*.py"), *(KIT / "tools").glob("*.py"), *(KIT / "tools" / "bench").glob("*.py")])
     check(len(scripts) >= 10, f"found only {len(scripts)} scripts")
     bad = []
+
+    def tree() -> dict:  # mtime and size of every tracked file: a rewrite shows up even when the content is the same
+        return {f: (os.stat(KIT / f).st_mtime_ns, os.stat(KIT / f).st_size) for f in git(KIT, "ls-files").splitlines() if f}
+
+    before = tree()
     for py in scripts:
         code, out = run([sys.executable, py, "--help"], t.base, force_cp1252=True)
         if code != 0 or "UnicodeEncodeError" in out:
             bad.append(f"{py.name}: exit {code} {out.strip()[:80]}")
     check(not bad, "; ".join(bad))
+    changed = sorted(f for f, v in tree().items() if before.get(f) != v)
+    check(not changed, f"--help rewrote tracked files of the kit: {changed}; a script writes before it parses its arguments")
 
 
 # ================================================================ runner

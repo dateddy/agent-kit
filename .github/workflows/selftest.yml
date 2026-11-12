@@ -26,6 +26,15 @@ jobs:
       - name: ruff check (kit Python)
         run: ruff check tools skills scripts
 
+      - name: Tracked files untouched (the kit's tools must not write them)
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::a step changed or created files in the checkout:"
+            git status --porcelain
+            exit 1
+          fi
+
   selftest:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
@@ -71,3 +80,12 @@ jobs:
         run: python -m unittest scripts/tests/test_guard_py.py -v
       - name: False-positive sweep (docs commands through the guards)
         run: python tools/fp_sweep.py
+
+      - name: Tracked files untouched (the kit's tools must not write them)
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::a step changed or created files in the checkout:"
+            git status --porcelain
+            exit 1
+          fi

@@ -8,8 +8,10 @@
 Cases (median of --runs, seconds):
   vf_full         full verify (CLI)
   hook_nochange   Stop hook on an unchanged tree
-  hook_1file      Stop hook after one line was added to scripts/gitkit.py (restored afterwards)
-  edit            PostToolUse hook for one .py file
+  hook_1file      Stop hook with one new untracked file (perf_probe_tmp.py, deleted afterwards)
+  edit            PostToolUse hook for .agentkit/tmp/perf_edit.py (fixed content, deleted afterwards)
+  edit_ruff       the same two ruff calls without the engine; engine overhead = edit - edit_ruff when the
+                  repo's config makes the hook run ruff (the kit's own config does not, so there edit IS the overhead)
   rmap_zone_cold  rmap --zone with the repomap cache removed first
   rmap_zone_warm  rmap --zone right after a cold run
 
@@ -21,6 +23,7 @@ Exit: 0 ok, 1 a case failed to run.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -33,21 +36,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 BASH = os.environ.get("AK_BASH") or shutil.which("bash") or "bash"
-TOUCH = ROOT / "scripts" / "gitkit.py"
+EDIT_FILE = ROOT / ".agentkit" / "tmp" / "perf_edit.py"
 STOP = json.dumps({"hook_event_name": "Stop", "stop_hook_active": False})
 CACHE = ROOT / ".agentkit" / "cache" / "repomap.json"
 RMAP = ROOT / "skills" / "economizing-context" / "scripts" / "repomap.py"
 
 
 def set_root(root: Path) -> None:
-    global ROOT, TOUCH, CACHE, RMAP
+    global ROOT, EDIT_FILE, CACHE, RMAP
     ROOT = root.resolve()
-    TOUCH = ROOT / "scripts" / "gitkit.py"
+    EDIT_FILE = ROOT / ".agentkit" / "tmp" / "perf_edit.py"
     CACHE = ROOT / ".agentkit" / "cache" / "repomap.json"
     RMAP = ROOT / "skills" / "economizing-context" / "scripts" / "repomap.py"
 
 
-CASES = ("vf_full", "hook_nochange", "hook_1file", "edit", "rmap_zone_cold", "rmap_zone_warm")
+CASES = ("vf_full", "hook_nochange", "hook_1file", "edit", "edit_ruff", "rmap_zone_cold", "rmap_zone_warm")
+PROBE_SRC = "x = 1" + chr(10)
+EDIT_SRC = "import   os,sys" + chr(10) + "x = {  'a':1 }" + chr(10)  # unformatted on purpose: ruff has work to do
 
 
 def run(argv: list[str], stdin: str | None = None) -> int:
@@ -71,26 +76,37 @@ def timed(fn) -> float:
     return time.perf_counter() - t
 
 
+@contextlib.contextmanager
+def scratch(path: Path, text: str):
+    """Create a throwaway file for one measurement and always delete it again. The kit's tools never write a tracked
+    file: the files used here are untracked (the probe) or under .agentkit/tmp (gitignored)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="")
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def one(case: str) -> float:
     if case == "vf_full":
         return timed(lambda: run(full_cmd()))
     if case == "hook_nochange":
         return timed(lambda: run(hook_cmd(), STOP))
-    if case == "hook_1file":
-        orig = TOUCH.read_bytes()
-        try:
-            TOUCH.write_bytes(orig + b"\n# perf probe\n")
+    if case == "hook_1file":  # one new untracked python file, so the hook has exactly one changed file
+        with scratch(ROOT / "perf_probe_tmp.py", PROBE_SRC):
             return timed(lambda: run(hook_cmd(), STOP))
-        finally:
-            TOUCH.write_bytes(orig)
-    if case == "edit":
-        # ruff --fix / format rewrite the file: always put the original bytes back
-        orig = TOUCH.read_bytes()
-        try:
-            payload = json.dumps({"tool_input": {"file_path": str(TOUCH)}})
+    if case == "edit":  # the PostToolUse hook for one file: engine overhead (+ ruff when the repo's config runs it)
+        with scratch(EDIT_FILE, EDIT_SRC) as f:
+            payload = json.dumps({"tool_input": {"file_path": str(f)}})
             return timed(lambda: run([BASH, str(ROOT / "scripts" / "ruff-fix.sh")], payload))
-        finally:
-            TOUCH.write_bytes(orig)
+    if case == "edit_ruff":  # the same two ruff calls the hook makes, without the engine: its overhead is edit - edit_ruff
+        ruff = shutil.which("ruff")
+        if ruff is None:
+            raise RuntimeError("ruff not found on PATH")
+        with scratch(EDIT_FILE, EDIT_SRC) as f:
+            args = ["--quiet", "--force-exclude", "--extend-exclude", ".agentkit", "--extend-exclude", ".claude", str(f)]
+            return timed(lambda: (run([ruff, "check", "--fix", *args]), run([ruff, "format", *args])))
     if case == "rmap_zone_cold":
         CACHE.unlink(missing_ok=True)
         return timed(lambda: run([PY, str(RMAP), "--zone", "scripts/gitkit.py"]))
