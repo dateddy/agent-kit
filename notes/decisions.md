@@ -182,3 +182,7 @@ Why: Keeps cascade-lad on lint+scope.
 ## D-3c57 · 2026-11-12 · scope · refactor/verify-engine
 tools/selftest.py: step 1 test for the dbg hint (DB4 asserts no promptkit) lives in selftest; file not listed in step 1 Files. tools/bench/perf.py: edit case restores the file it reformats.
 Why: Plan said selftest or an existing dbg test file; selftest holds the DB scenarios.
+
+## D-fa10 · 2026-11-12 · scope · refactor/verify-engine
+Step 2 also touches skills/writing-plans/scripts/plan.py (active_step ignores a trailing CR: task notes written by nt on Windows are CRLF, so plan.py field found no checklist and the scope stage failed) and tools/install.py (GUARD_SCRIPTS gains akcore.py and verify.py, which verify.sh now needs; the rest of the installer work stays in step 5).
+Why: vf must exit 0 on the kit itself after step 2; both are latent from 0.5.0 / forced by the new wrapper.

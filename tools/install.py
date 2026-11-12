@@ -45,7 +45,7 @@ CHILD_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 LEGACY_SKILLS = ("starting-tasks",)  # merged into writing-plans in v3
 HOOK_CMD = "python .agentkit/skills/keeping-notes/scripts/notes.py brief"
 KIT = Path(__file__).resolve().parent.parent
-GUARD_SCRIPTS = ("lib.sh", "py.sh", "guard-git.sh", "guard-fs.sh", "guard.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
+GUARD_SCRIPTS = ("lib.sh", "py.sh", "guard-git.sh", "guard-fs.sh", "guard.py", "akcore.py", "verify.py", "verify.sh", "plan-step.sh", "ruff-fix.sh", "pre-push")
 GUARD_IGNORE = (".agentkit/coverage.xml", ".coverage")  # written by verify.sh
 # bash fails on CR: with core.autocrlf=true git would check the scripts out with CRLF
 GUARD_EOL = ".agentkit/scripts/** text eol=lf"

@@ -1,35 +1,17 @@
 #!/usr/bin/env bash
-# ruff-fix.sh - Claude Code PostToolUse hook (matcher Edit|Write): `ruff check --fix` and `ruff format`
-# on the one .py file that was just edited, if it belongs to this repository. Anything else is a no-op:
-# a file in another repo or outside any repo follows that project's own formatting rules, not ours.
+# ruff-fix.sh - Claude Code PostToolUse hook (matcher Edit|Write): thin wrapper for `verify.py --edit`, which runs
+# `ruff check --fix` and `ruff format` on the one .py file that was just edited, if it belongs to this repository.
 #
-# Exit-code convention (Claude Code PostToolUse hook): 0 = done or nothing to do; 2 = stderr is shown to
-# Claude (the edit already happened, so this reports what could not be fixed or that ruff is missing).
-# Exit 1 would be a silent non-blocking error, so it is never used. Nothing is written to stdout.
-# Switch off with guards.ruff=false in .agentkit.json; the tool is guards.ruff_cmd (default: ruff).
+# Exit-code convention (Claude Code PostToolUse hook): 0 = done or nothing to do; 2 = stderr is shown to Claude
+# (the edit already happened, so this reports what could not be fixed or that ruff is missing). Never 1 (silent).
+# Switch off with verify.lint=false and verify.format=false (0.5.0: guards.ruff=false) in .agentkit.json.
 set -u
-# shellcheck disable=SC2034  # AK_FAIL is read by ak_fail in lib.sh
-AK_FAIL=2
-# shellcheck source=lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-
-file=$(cat | jq -r '.tool_input.file_path // empty' 2>/dev/null | tr -d '\015')
-[ -n "$file" ] || exit 0
-file=${file//\\//}  # Windows paths from the hook JSON
-case $file in *.py) ;; *) exit 0 ;; esac
-cfg_on guards.ruff true || exit 0
-[ -f "$file" ] || exit 0
-top=$(git -C "$(dirname "$file")" rev-parse --show-toplevel 2>/dev/null) || exit 0
-[ "$top" = "$(git rev-parse --show-toplevel 2>/dev/null)" ] || exit 0
-
-read -r -a R <<<"$(cfg guards.ruff_cmd ruff)"
-need "${R[0]}" ruff
-
-out=$("${R[@]}" check --fix --quiet --force-exclude "${AK_RUFF_EXCLUDE[@]}" "$file" 2>&1) && rc=0 || rc=$?
-"${R[@]}" format --quiet --force-exclude "${AK_RUFF_EXCLUDE[@]}" "$file" >/dev/null 2>&1
-if [ "$rc" -ne 0 ]; then
-  echo "ruff left problems in $file:" >&2
-  printf '%s\n' "$out" | tail -n 15 >&2
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=py.sh
+. "$HERE/py.sh"
+if ! ak_find_py; then
+  echo "ruff-fix.sh: python not found (tried python3, python, py -3)" >&2
   exit 2
 fi
-exit 0
+# shellcheck disable=SC2154  # ak_py and ak_py_args are set by ak_find_py in py.sh
+exec "$ak_py" ${ak_py_args:+"$ak_py_args"} "$HERE/verify.py" --edit

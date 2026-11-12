@@ -1,8 +1,9 @@
 {
   "verify": {
-    "test": "python tools/selftest.py",
+    "tests": "python tools/selftest.py",
     "lint": "ruff check .",
+    "format": null,
     "typecheck": null,
-    "format": null
+    "diff_cover": false
   }
 }

@@ -367,6 +367,7 @@ def active_step(note_text: str) -> str:
     """First unchecked item of the note's `## Plan` checklist, else the last item, else ""."""
     sec, first, last = "", "", ""
     for line in note_text.split("\n"):
+        line = line.rstrip("\r")  # notes written on Windows are CRLF
         if line.startswith("## "):
             sec = line[3:].lower()
         elif sec == "plan" and re.match(r"^- \[[ x]\] [0-9]+\.", line):
